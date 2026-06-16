@@ -2,6 +2,7 @@ package dev.krotname.networkchat.network;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -29,14 +30,28 @@ class NetworkSecuritySupportTest {
                 TlsClientConfig.ENV_TRUSTSTORE,
                 "chat.p12",
                 TlsClientConfig.ENV_TRUSTSTORE_PASSWORD,
-                "changeit",
-                TlsClientConfig.ENV_TRUST_ALL,
-                "1"));
+                "changeit"));
 
     assertTrue(config.enabled());
     assertEquals(Path.of("chat.p12"), config.trustStoreFile());
     assertEquals("changeit", config.trustStorePassword());
-    assertTrue(config.trustAllCertificates());
+  }
+
+  @Test
+  void tlsClientConfigRejectsTrustAllMode() {
+    IllegalArgumentException error =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                TlsClientConfig.fromEnvironment(
+                    Map.of(
+                        TlsClientConfig.ENV_TLS_ENABLED,
+                        "true",
+                        TlsClientConfig.ENV_TRUST_ALL,
+                        "1")));
+
+    assertTrue(error.getMessage().contains(TlsClientConfig.ENV_TRUST_ALL));
+    assertTrue(error.getMessage().contains(TlsClientConfig.ENV_TRUSTSTORE));
   }
 
   @Test
