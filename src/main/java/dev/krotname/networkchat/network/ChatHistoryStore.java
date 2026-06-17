@@ -24,6 +24,7 @@ public final class ChatHistoryStore {
   private final Path historyFile;
   private final int historyLimit;
   private final List<ChatMessage> messages = new ArrayList<>();
+  private final Object lock = new Object();
   private final boolean enabled;
   private int corruptRecordCount;
 
@@ -45,41 +46,49 @@ public final class ChatHistoryStore {
     return new ChatHistoryStore(historyFile, historyLimit, true);
   }
 
-  public synchronized void save(ChatMessage message) {
-    if (!enabled || !isPersistable(message)) {
-      return;
-    }
-    messages.add(message);
-    trimToLimit();
-    rewrite();
-  }
-
-  public synchronized List<ChatMessage> recentRoomMessages(String roomName, int limit) {
-    if (limit <= 0) {
-      return List.of();
-    }
-    List<ChatMessage> roomMessages = new ArrayList<>();
-    for (ChatMessage message : messages) {
-      if (message.type() == MessageType.ROOM_TEXT && roomName.equals(message.room())) {
-        roomMessages.add(message);
+  public void save(ChatMessage message) {
+    synchronized (lock) {
+      if (!enabled || !isPersistable(message)) {
+        return;
       }
+      messages.add(message);
+      trimToLimit();
+      rewrite();
     }
-    return last(roomMessages, limit);
   }
 
-  public synchronized Set<String> knownRooms() {
-    Set<String> rooms = new TreeSet<>();
-    rooms.add(ChatMessage.GENERAL_ROOM);
-    for (ChatMessage message : messages) {
-      if (message.room() != null && !message.room().isBlank()) {
-        rooms.add(message.room());
+  public List<ChatMessage> recentRoomMessages(String roomName, int limit) {
+    synchronized (lock) {
+      if (limit <= 0) {
+        return List.of();
       }
+      List<ChatMessage> roomMessages = new ArrayList<>();
+      for (ChatMessage message : messages) {
+        if (message.type() == MessageType.ROOM_TEXT && roomName.equals(message.room())) {
+          roomMessages.add(message);
+        }
+      }
+      return last(roomMessages, limit);
     }
-    return Collections.unmodifiableSet(rooms);
   }
 
-  public synchronized int corruptRecordCount() {
-    return corruptRecordCount;
+  public Set<String> knownRooms() {
+    synchronized (lock) {
+      Set<String> rooms = new TreeSet<>();
+      rooms.add(ChatMessage.GENERAL_ROOM);
+      for (ChatMessage message : messages) {
+        if (message.room() != null && !message.room().isBlank()) {
+          rooms.add(message.room());
+        }
+      }
+      return Collections.unmodifiableSet(rooms);
+    }
+  }
+
+  public int corruptRecordCount() {
+    synchronized (lock) {
+      return corruptRecordCount;
+    }
   }
 
   private void load() {
