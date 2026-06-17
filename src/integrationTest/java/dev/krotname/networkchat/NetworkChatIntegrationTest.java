@@ -34,10 +34,11 @@ class NetworkChatIntegrationTest {
 
   @Test
   void serverBroadcastsMessagesBetweenClients() throws Exception {
-    int port = randomFreePort();
+    int port = 0;
     try (ChatServer server = new ChatServer(port)) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       try (TestClient alice = new TestClient("alice", port);
           TestClient bob = new TestClient("bob", port)) {
@@ -58,10 +59,11 @@ class NetworkChatIntegrationTest {
 
   @Test
   void newClientReceivesOwnUserListEntry() throws Exception {
-    int port = randomFreePort();
+    int port = 0;
     try (ChatServer server = new ChatServer(port)) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       try (TestClient alice = new TestClient("alice", port)) {
         alice.connect();
@@ -73,10 +75,11 @@ class NetworkChatIntegrationTest {
 
   @Test
   void roomMessagesReachOnlyRoomMembers() throws Exception {
-    int port = randomFreePort();
+    int port = 0;
     try (ChatServer server = new ChatServer(port)) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       try (TestClient alice = new TestClient("alice", port);
           TestClient bob = new TestClient("bob", port);
@@ -101,10 +104,11 @@ class NetworkChatIntegrationTest {
 
   @Test
   void privateMessagesReachOnlySenderAndRecipient() throws Exception {
-    int port = randomFreePort();
+    int port = 0;
     try (ChatServer server = new ChatServer(port)) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       try (TestClient alice = new TestClient("alice", port);
           TestClient bob = new TestClient("bob", port);
@@ -126,10 +130,11 @@ class NetworkChatIntegrationTest {
 
   @Test
   void joiningAndLeavingRoomsProducesRoomEvents() throws Exception {
-    int port = randomFreePort();
+    int port = 0;
     try (ChatServer server = new ChatServer(port)) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       try (TestClient alice = new TestClient("alice", port)) {
         alice.connect();
@@ -146,11 +151,12 @@ class NetworkChatIntegrationTest {
   @Test
   void serverReplaysRoomHistoryAfterRestart() throws Exception {
     Path historyFile = tempDir.resolve("history.jsonl");
-    int firstPort = randomFreePort();
+    int firstPort = 0;
     try (ChatServer server =
         new ChatServer(ChatServerConfig.ofPort(firstPort).withHistory(historyFile, 100, 10))) {
       server.start();
       server.awaitStarted();
+      firstPort = server.getPort();
 
       try (TestClient alice = new TestClient("alice", firstPort)) {
         alice.connect();
@@ -159,11 +165,12 @@ class NetworkChatIntegrationTest {
       }
     }
 
-    int secondPort = randomFreePort();
+    int secondPort = 0;
     try (ChatServer server =
         new ChatServer(ChatServerConfig.ofPort(secondPort).withHistory(historyFile, 100, 10))) {
       server.start();
       server.awaitStarted();
+      secondPort = server.getPort();
 
       try (TestClient bob = new TestClient("bob", secondPort)) {
         bob.connect();
@@ -176,11 +183,12 @@ class NetworkChatIntegrationTest {
   @Test
   void serverRequiresConfiguredAccountToken() throws Exception {
     Path accountFile = writeAccounts("alice", UserRole.USER, "secret");
-    int port = randomFreePort();
+    int port = 0;
     try (ChatServer server =
         new ChatServer(ChatServerConfig.ofPort(port).withAccounts(accountFile))) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       try (ChatConnection connection = new ChatConnection(connectWithRetry(port))) {
         consumeNameRequest(connection);
@@ -205,11 +213,12 @@ class NetworkChatIntegrationTest {
   @Test
   void adminCanRequestServerHealth() throws Exception {
     Path accountFile = writeAccounts("admin", UserRole.ADMIN, "secret");
-    int port = randomFreePort();
+    int port = 0;
     try (ChatServer server =
         new ChatServer(ChatServerConfig.ofPort(port).withAccounts(accountFile))) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       try (TestClient admin = new TestClient("admin", port, "secret")) {
         admin.connect();
@@ -224,10 +233,11 @@ class NetworkChatIntegrationTest {
 
   @Test
   void unversionedClientReceivesExplicitProtocolError() throws Exception {
-    int port = randomFreePort();
+    int port = 0;
     try (ChatServer server = new ChatServer(port)) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       Socket socket = connectWithRetry(port);
       socket.setSoTimeout((int) TimeUnit.SECONDS.toMillis(2));
@@ -253,10 +263,11 @@ class NetworkChatIntegrationTest {
 
   @Test
   void serverRejectsDuplicateUserName() throws Exception {
-    int port = randomFreePort();
+    int port = 0;
     try (ChatServer server = new ChatServer(port)) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       try (TestClient alice = new TestClient("alice", port);
           ChatConnection duplicate = new ChatConnection(connectWithRetry(port))) {
@@ -275,10 +286,11 @@ class NetworkChatIntegrationTest {
 
   @Test
   void serverRejectsInvalidUserName() throws Exception {
-    int port = randomFreePort();
+    int port = 0;
     try (ChatServer server = new ChatServer(port)) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       try (TestClient alice = new TestClient("alice", port);
           ChatConnection invalid = new ChatConnection(connectWithRetry(port))) {
@@ -297,10 +309,11 @@ class NetworkChatIntegrationTest {
 
   @Test
   void serverRemovesUserWhenConnectionCloses() throws Exception {
-    int port = randomFreePort();
+    int port = 0;
     try (ChatServer server = new ChatServer(port)) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       try (TestClient alice = new TestClient("alice", port);
           TestClient bob = new TestClient("bob", port)) {
@@ -317,12 +330,13 @@ class NetworkChatIntegrationTest {
 
   @Test
   void serverRejectsConnectionsOverConfiguredLimit() throws Exception {
-    int port = randomFreePort();
+    int port = 0;
     ChatServerConfig config =
         new ChatServerConfig(port, 1, Duration.ofSeconds(2), Duration.ofSeconds(5));
     try (ChatServer server = new ChatServer(config)) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       try (TestClient alice = new TestClient("alice", port)) {
         alice.connect();
@@ -339,12 +353,13 @@ class NetworkChatIntegrationTest {
 
   @Test
   void serverClosesClientThatDoesNotCompleteHandshake() throws Exception {
-    int port = randomFreePort();
+    int port = 0;
     ChatServerConfig config =
         new ChatServerConfig(port, 2, Duration.ofMillis(200), Duration.ofSeconds(5));
     try (ChatServer server = new ChatServer(config)) {
       server.start();
       server.awaitStarted();
+      port = server.getPort();
 
       Socket socket = connectWithRetry(port);
       socket.setSoTimeout((int) TimeUnit.SECONDS.toMillis(2));
@@ -481,14 +496,6 @@ class NetworkChatIntegrationTest {
     return false;
   }
 
-  private static int randomFreePort() {
-    try (ServerSocket socket = new ServerSocket(0)) {
-      return socket.getLocalPort();
-    } catch (IOException ex) {
-      return 1500;
-    }
-  }
-
   private static Socket connectWithRetry(int port) throws Exception {
     IOException lastError = null;
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -544,10 +551,16 @@ class NetworkChatIntegrationTest {
       connection.send(
           ChatMessage.withData(
               MessageType.USER_NAME, LoginCredentials.encode(userName, token), null));
-      ChatMessage accepted = connection.receive();
-      if (accepted.type() != MessageType.NAME_ACCEPTED) {
-        throw new IllegalStateException("Expected NAME_ACCEPTED");
-      }
+      ChatMessage accepted;
+      do {
+        accepted = connection.receive();
+        if (accepted.type() == MessageType.ERROR) {
+          throw new IllegalStateException("Expected NAME_ACCEPTED, got ERROR: " + accepted.data());
+        }
+        if (accepted.type() != MessageType.NAME_ACCEPTED) {
+          messages.offer(accepted);
+        }
+      } while (accepted.type() != MessageType.NAME_ACCEPTED);
 
       reader =
           new Thread(
