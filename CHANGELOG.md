@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.6.1 - 2026-06-19
+
+- Hardened account storage, history migration, TLS socket handling, and integration coverage after repository audit.
+- Refreshed Gradle wrapper, formatter gate, and CI/release supply-chain checks.
+
 ## 1.6.0 - 2026-06-12
 
 - Reworked Swing connection flow into a single settings dialog with defaults, cancel, and retry.

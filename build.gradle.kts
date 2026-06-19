@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "dev.krotname"
-version = "1.6.0"
+version = "1.6.1"
 
 java {
     toolchain {
