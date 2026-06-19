@@ -61,8 +61,12 @@ class AccountStoreTest {
     Path invalidUser = tempDir.resolve("invalid-user.csv");
     Files.writeString(
         duplicateUsers,
-        "alice,USER,salt," + AccountStore.hashToken("salt", "secret") + "\n"
-            + "alice,ADMIN,other," + AccountStore.hashToken("other", "secret") + "\n",
+        "alice,USER,salt,"
+            + AccountStore.hashToken("salt", "secret")
+            + "\n"
+            + "alice,ADMIN,other,"
+            + AccountStore.hashToken("other", "secret")
+            + "\n",
         StandardCharsets.UTF_8);
     Files.writeString(
         invalidUser,
