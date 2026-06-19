@@ -16,6 +16,9 @@ import java.util.Optional;
 /** File-backed account registry with salted SHA-256 token hashes. */
 public final class AccountStore {
   private static final String HASH_ALGORITHM = "SHA-256";
+  private static final int MIN_USER_NAME_LENGTH = 3;
+  private static final int MAX_USER_NAME_LENGTH = 64;
+  private static final String USER_NAME_PATTERN = "[\\p{L}\\p{N}_-]+";
 
   private final Map<String, AccountRecord> accounts;
   private final boolean enabled;
@@ -39,7 +42,9 @@ public final class AccountStore {
         continue;
       }
       AccountRecord account = parseLine(line, lineNumber);
-      loadedAccounts.put(account.userName(), account);
+      if (loadedAccounts.putIfAbsent(account.userName(), account) != null) {
+        throw new IllegalArgumentException("Duplicate account user name on line " + lineNumber);
+      }
     }
     return new AccountStore(loadedAccounts, true);
   }
@@ -78,6 +83,13 @@ public final class AccountStore {
     return accounts.size();
   }
 
+  public static boolean isValidUserName(String userName) {
+    return userName != null
+        && userName.length() >= MIN_USER_NAME_LENGTH
+        && userName.length() <= MAX_USER_NAME_LENGTH
+        && userName.matches(USER_NAME_PATTERN);
+  }
+
   private static AccountRecord parseLine(String line, int lineNumber) {
     String[] columns = line.split(",", -1);
     if (columns.length != 4) {
@@ -87,7 +99,7 @@ public final class AccountStore {
     UserRole role = parseRole(columns[1].trim(), lineNumber);
     String salt = columns[2].trim();
     String tokenHash = columns[3].trim().toLowerCase(Locale.ROOT);
-    if (userName.isBlank() || salt.isBlank() || tokenHash.isBlank()) {
+    if (!isValidUserName(userName) || salt.isBlank() || tokenHash.isBlank()) {
       throw new IllegalArgumentException("Invalid account file line " + lineNumber);
     }
     return new AccountRecord(userName, role, salt, tokenHash);

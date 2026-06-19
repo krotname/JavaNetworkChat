@@ -28,8 +28,6 @@ import java.util.logging.Logger;
 /** Chat server that authenticates users, keeps sessions, and broadcasts messages. */
 public final class ChatServer implements AutoCloseable {
   private static final Logger LOG = Logger.getLogger(ChatServer.class.getName());
-  private static final int MIN_USER_NAME_LENGTH = 3;
-  private static final int MAX_USER_NAME_LENGTH = 64;
   private static final int MIN_ROOM_NAME_LENGTH = 1;
   private static final int MAX_ROOM_NAME_LENGTH = 64;
 
@@ -249,9 +247,7 @@ public final class ChatServer implements AutoCloseable {
   }
 
   private boolean isNameValid(String userName) {
-    return userName.length() >= MIN_USER_NAME_LENGTH
-        && userName.length() <= MAX_USER_NAME_LENGTH
-        && userName.matches("[\\p{L}\\p{N}_-]+");
+    return AccountStore.isValidUserName(userName);
   }
 
   /** Sends all registered users to the new client so UI state is correct right after connect. */

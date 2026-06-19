@@ -54,4 +54,22 @@ class AccountStoreTest {
     assertThrows(IllegalArgumentException.class, () -> AccountStore.load(missingColumns));
     assertThrows(IllegalArgumentException.class, () -> AccountStore.load(missingValues));
   }
+
+  @Test
+  void rejectsDuplicateOrInvalidUserNames() throws Exception {
+    Path duplicateUsers = tempDir.resolve("duplicate-users.csv");
+    Path invalidUser = tempDir.resolve("invalid-user.csv");
+    Files.writeString(
+        duplicateUsers,
+        "alice,USER,salt," + AccountStore.hashToken("salt", "secret") + "\n"
+            + "alice,ADMIN,other," + AccountStore.hashToken("other", "secret") + "\n",
+        StandardCharsets.UTF_8);
+    Files.writeString(
+        invalidUser,
+        "al,USER,salt," + AccountStore.hashToken("salt", "secret") + "\n",
+        StandardCharsets.UTF_8);
+
+    assertThrows(IllegalArgumentException.class, () -> AccountStore.load(duplicateUsers));
+    assertThrows(IllegalArgumentException.class, () -> AccountStore.load(invalidUser));
+  }
 }
