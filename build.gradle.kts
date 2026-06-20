@@ -1,5 +1,7 @@
 import java.security.MessageDigest
 import java.time.Instant
+import java.util.UUID
+import groovy.json.JsonOutput
 
 plugins {
     java
@@ -267,6 +269,7 @@ val packageWindowsZip = tasks.register<Zip>("packageWindowsZip") {
 }
 
 val provenanceFile = layout.buildDirectory.file("release/provenance.json")
+val sbomFile = layout.buildDirectory.file("release/$releasePackageName-sbom.cdx.json")
 
 tasks.register("releaseProvenance") {
     group = "distribution"
@@ -306,15 +309,16 @@ tasks.register("releaseProvenance") {
 tasks.register("releaseChecksums") {
     group = "distribution"
     description = "Write SHA-256 checksums for release artifacts"
-    dependsOn(packageWindowsZip, tasks.named("releaseProvenance"))
+    dependsOn(packageWindowsZip, tasks.named("releaseProvenance"), "releaseSbom")
     val checksumsFile = layout.buildDirectory.file("release/checksums.txt")
-    inputs.files(packageWindowsZip.flatMap { it.archiveFile }, provenanceFile)
+    inputs.files(packageWindowsZip.flatMap { it.archiveFile }, provenanceFile, sbomFile)
     outputs.file(checksumsFile)
     doLast {
         val artifacts =
             listOf(
                 packageWindowsZip.get().archiveFile.get().asFile,
                 provenanceFile.get().asFile,
+                sbomFile.get().asFile,
             )
         checksumsFile.get().asFile.writeText(
             artifacts.joinToString(System.lineSeparator()) {
@@ -324,10 +328,52 @@ tasks.register("releaseChecksums") {
     }
 }
 
+tasks.register("releaseSbom") {
+    group = "distribution"
+    description = "Write a CycloneDX SBOM for the release runtime classpath"
+    outputs.file(sbomFile)
+    doLast {
+        val components =
+            configurations.runtimeClasspath.get().resolvedConfiguration.resolvedArtifacts
+                .sortedWith(compareBy({ it.moduleVersion.id.group }, { it.name }, { it.moduleVersion.id.version }))
+                .map {
+                    val id = it.moduleVersion.id
+                    mapOf(
+                        "type" to "library",
+                        "bom-ref" to "pkg:maven/${id.group}/${id.name}@${id.version}",
+                        "group" to id.group,
+                        "name" to id.name,
+                        "version" to id.version,
+                        "purl" to "pkg:maven/${id.group}/${id.name}@${id.version}",
+                    )
+                }
+        val bom =
+            mapOf(
+                "bomFormat" to "CycloneDX",
+                "specVersion" to "1.6",
+                "serialNumber" to "urn:uuid:${UUID.nameUUIDFromBytes("${project.name}:${project.version}".toByteArray())}",
+                "version" to 1,
+                "metadata" to
+                    mapOf(
+                        "timestamp" to Instant.now().toString(),
+                        "component" to
+                            mapOf(
+                                "type" to "application",
+                                "name" to project.name,
+                                "version" to project.version.toString(),
+                                "purl" to "pkg:maven/${project.group}/${project.name}@${project.version}",
+                            ),
+                    ),
+                "components" to components,
+            )
+        sbomFile.get().asFile.writeText(JsonOutput.prettyPrint(JsonOutput.toJson(bom)))
+    }
+}
+
 tasks.register("releaseBundle") {
     group = "distribution"
-    description = "Build release zip, checksums, and provenance metadata"
-    dependsOn(packageWindowsZip, tasks.named("releaseProvenance"), tasks.named("releaseChecksums"))
+    description = "Build release zip, checksums, SBOM, and provenance metadata"
+    dependsOn(packageWindowsZip, tasks.named("releaseProvenance"), tasks.named("releaseSbom"), tasks.named("releaseChecksums"))
 }
 
 fun sha256(file: File): String {

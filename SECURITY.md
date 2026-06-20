@@ -34,7 +34,7 @@ Protected assets:
 - chat message contents in transit when TLS is enabled,
 - account tokens stored only as salted SHA-256 hashes in the optional accounts file,
 - server availability under configured client limits,
-- release artifacts and their checksums/provenance metadata.
+- release artifacts, CycloneDX SBOM, checksums, provenance metadata, and GitHub attestations.
 
 Trust boundaries:
 
@@ -59,4 +59,4 @@ Operational recommendations:
 - Enable TLS outside localhost/trusted lab networks.
 - Keep `accounts.csv` readable only by the server operator.
 - Rotate tokens by replacing account-file rows and restarting the server.
-- Publish release zip files together with `checksums.txt` and `provenance.json`.
+- Publish release zip files together with `checksums.txt`, CycloneDX SBOM, `provenance.json`, and GitHub attestations.
