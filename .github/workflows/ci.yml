@@ -7,7 +7,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -19,8 +19,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false
       - name: Setup Java
         uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
         with:
@@ -32,6 +30,19 @@ jobs:
           gradle-version: "8.10.2"
       - name: Run tests and checks
         run: ./gradlew check jacocoAllReport --stacktrace
+      - name: Generate Coverage Badge
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: cicirello/jacoco-badge-generator@72266185b7ee48a6fd74eaf0238395cc8b14fef8 # v2.12.1
+        with:
+          jacoco-csv-file: build/reports/jacoco/jacocoAllReport/jacocoAllReport.csv
+      - name: Commit coverage badge
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/badges/
+          git diff --staged --quiet || git commit -m "chore: update coverage badge [skip ci]"
+          git push
       - name: Publish coverage summary
         if: matrix.os == 'ubuntu-latest'
         shell: bash

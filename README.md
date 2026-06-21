@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/krotname/JavaNetworkChat/actions/workflows/ci.yml/badge.svg)](https://github.com/krotname/JavaNetworkChat/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/krotname/JavaNetworkChat/actions/workflows/codeql.yml/badge.svg)](https://github.com/krotname/JavaNetworkChat/actions/workflows/codeql.yml)
-[![Coverage Gate](https://img.shields.io/badge/coverage%20gate-JaCoCo%20line%2070%25%2B-2ea44f)](https://github.com/krotname/JavaNetworkChat/actions/workflows/ci.yml)
+[![Coverage](.github/badges/jacoco.svg)](https://github.com/krotname/JavaNetworkChat/actions/workflows/ci.yml?query=branch%3Amain)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/krotname/JavaNetworkChat/badge)](https://securityscorecards.dev/viewer/?uri=github.com/krotname/JavaNetworkChat)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13154/badge)](https://www.bestpractices.dev/projects/13154)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
