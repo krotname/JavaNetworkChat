@@ -19,7 +19,7 @@ Network Chat is a Java 21 chat application over TCP sockets with:
 - optional file-backed message history with room replay after server restart.
 - optional TLS mode, token-based accounts with `USER`/`ADMIN` roles, and the admin `/health`
   command.
-- a Windows release zip with launch scripts, checksums, and provenance metadata.
+- a Windows release zip with launch scripts, checksums, CycloneDX SBOM, and provenance metadata.
 - reproducible Gradle build, tests, CI, and quality gates.
 
 ![Swing GUI client](docs/images/gui-client.svg)
@@ -84,7 +84,14 @@ To build a no-Gradle release package for end users:
 ./gradlew releaseBundle
 ```
 
-Artifacts are written to `build/release`: the Windows zip, `checksums.txt`, and `provenance.json`.
+Artifacts are written to `build/release`: the Windows zip, `checksums.txt`, CycloneDX SBOM, and `provenance.json`.
+
+Release verification:
+
+```bash
+sha256sum -c checksums.txt
+gh attestation verify network-chat-*-windows.zip --repo krotname/JavaNetworkChat
+```
 
 ## Architecture and protocol
 
@@ -177,6 +184,7 @@ This repository is organized for maintainability:
 - Automated quality gates via Checkstyle, Spotless, SpotBugs and JaCoCo.
 - Security checks via CodeQL and OpenSSF Scorecard.
 - Dependency and workflow automation via Dependabot.
+- Release artifacts: zip, `checksums.txt`, CycloneDX SBOM, provenance metadata, and GitHub attestations.
 - Explicit contributor and security docs.
 
 ## Troubleshooting
