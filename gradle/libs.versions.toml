@@ -5,7 +5,7 @@ jackson = "2.22.0"
 jacoco = "0.8.12"
 junit = "6.1.0"
 junit-platform = "6.1.0"
-spotbugs = "6.5.6"
+spotbugs = "6.5.8"
 spotbugs-annotations = "4.10.2"
 spotless = "8.7.0"
 
