@@ -240,7 +240,13 @@ public final class ChatServer implements AutoCloseable {
         }
         sessions.put(candidate, connection);
         roles.put(candidate, role);
-        connection.send(ChatMessage.withData(MessageType.NAME_ACCEPTED, null, null));
+        try {
+          connection.send(ChatMessage.withData(MessageType.NAME_ACCEPTED, null, null));
+        } catch (IOException ex) {
+          sessions.remove(candidate, connection);
+          roles.remove(candidate);
+          throw ex;
+        }
         return new HandshakeResult(candidate, role);
       }
     }
@@ -333,7 +339,12 @@ public final class ChatServer implements AutoCloseable {
     historyStore.save(normalized);
     connection.send(normalized);
     if (recipientConnection != connection) {
-      recipientConnection.send(normalized);
+      try {
+        recipientConnection.send(normalized);
+      } catch (IOException ex) {
+        LOG.log(Level.WARNING, "Failed sending private message to " + recipient, ex);
+        removeSession(recipient);
+      }
     }
   }
 

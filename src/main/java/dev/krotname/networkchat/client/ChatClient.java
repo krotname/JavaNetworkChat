@@ -24,6 +24,7 @@ public abstract class ChatClient {
   private volatile String resolvedAccountToken;
   private volatile TlsClientConfig resolvedTlsConfig = TlsClientConfig.disabled();
   private volatile String lastConnectionError;
+  private volatile boolean disconnectRequested;
   private volatile CountDownLatch connectionEstablishedLatch = new CountDownLatch(1);
 
   public abstract String getServerAddress() throws IOException;
@@ -51,6 +52,7 @@ public abstract class ChatClient {
   public void run() {
     clientConnected = false;
     lastConnectionError = null;
+    disconnectRequested = false;
     connectionEstablishedLatch = new CountDownLatch(1);
     try {
       String requestedServerAddress = getServerAddress();
@@ -140,6 +142,7 @@ public abstract class ChatClient {
   }
 
   public void disconnect() {
+    disconnectRequested = true;
     setConnectionStatus(false);
     closeConnection();
   }
@@ -198,7 +201,7 @@ public abstract class ChatClient {
           clientMainLoop();
         }
       } catch (Exception ex) {
-        if (clientConnected) {
+        if (!disconnectRequested) {
           recordConnectionError(ex.getMessage());
           LOG.warning("Connection error: " + lastConnectionError);
         } else {
