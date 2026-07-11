@@ -116,6 +116,8 @@ class ChatServerConcurrencyTest {
       try (ClientSession alice = connect(server, "alice");
           Socket brokenClient = new Socket("127.0.0.1", brokenSocketServer.getLocalPort());
           Socket brokenPeer = brokenSocketServer.accept()) {
+        alice.connection().send(ChatMessage.roomJoin("initialization_barrier"));
+        receiveUntilRoom(alice, "initialization_barrier");
         assertTrue(brokenClient.isConnected());
         ChatConnection brokenRecipient = new ChatConnection(brokenPeer);
         brokenRecipient.close();
@@ -155,6 +157,15 @@ class ChatServerConcurrencyTest {
     do {
       response = session.connection().receive(Duration.ofSeconds(2));
     } while (response.type() != expectedType);
+    return response;
+  }
+
+  private static ChatMessage receiveUntilRoom(ClientSession session, String expectedRoom)
+      throws Exception {
+    ChatMessage response;
+    do {
+      response = session.connection().receive(Duration.ofSeconds(2));
+    } while (response.type() != MessageType.ROOM_JOINED || !expectedRoom.equals(response.room()));
     return response;
   }
 
