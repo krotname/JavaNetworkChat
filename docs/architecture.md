@@ -36,9 +36,10 @@ Frames are one-line UTF-8 JSON objects serialized by `ChatProtocol`.
 - `room` carries room routing for `ROOM_TEXT`, `ROOM_JOIN`, `ROOM_LEAVE`, `ROOM_ADDED`,
   `ROOM_JOINED`, and `ROOM_LEFT`.
 - `recipient` carries the target user for `PRIVATE_TEXT`.
-- `timestamp` and `messageId` are generated when a frame is created and preserved when the server
-  echoes a normalized room or private message.
+- Clients may supply `timestamp` and `messageId`, but the server replaces both when it normalizes a
+  room or private message so clients cannot forge identity or ordering metadata.
 - `data` is limited by `ChatMessage.MAX_DATA_LENGTH`.
+- Encoded frames are limited to 8 KiB and reads use a total deadline to defeat slow trickle input.
 - Account tokens are carried in the existing `USER_NAME` frame as `username|base64(token)` so older
   plain username clients remain compatible when accounts are disabled.
 
@@ -47,6 +48,7 @@ Frames are one-line UTF-8 JSON objects serialized by `ChatProtocol`.
 `ChatServerConfig` centralizes runtime limits:
 
 - `port` - TCP port, default `1500`.
+- `bindAddress` - listen address, default loopback-only `127.0.0.1`.
 - `maxClients` - maximum concurrent client handler threads, default `100`.
 - `handshakeTimeout` - maximum time to complete username registration, default `10s`.
 - `readTimeout` - idle socket read timeout after handshake, default `5m`.
@@ -58,17 +60,22 @@ The legacy `new ChatServer(int port)` constructor delegates to `ChatServerConfig
 
 ## Security And Operations
 
-TLS is transport-level and optional. The server loads a Java keystore from `--tls-keystore` and
-`--tls-password`; clients opt in through `NETWORK_CHAT_TLS` plus an optional truststore. Plain TCP
-remains the default for local development and integration tests.
+TLS is transport-level and optional. The server loads a Java keystore from `--tls-keystore`; its
+passwords come only from `NETWORK_CHAT_TLS_KEYSTORE_PASSWORD` and
+`NETWORK_CHAT_TLS_KEY_PASSWORD`. Clients opt in through `NETWORK_CHAT_TLS` plus an optional
+truststore and verify the server hostname. Plain TCP remains the loopback-only default for local
+development and integration tests.
 
 Accounts are optional and loaded from a CSV file:
 
 ```text
-username,role,salt,sha256(salt:token)
+username,role,16-byte-hex-salt,pbkdf2-sha256$210000$derived-hash
 ```
 
-`AccountTool` / `./gradlew createAccount --args="alice USER secret"` prints one ready-to-append row.
+`AccountTool` / `./gradlew --quiet createAccount --args="alice USER"` reads the token from the
+console/stdin and prints one ready-to-append row without exposing the token in process arguments.
+Canonical unversioned SHA-256 rows produced by older releases remain readable as a migration path;
+operators should rotate them to the versioned PBKDF2 format.
 When accounts are enabled, clients must provide the token through the GUI token field or
 `NETWORK_CHAT_TOKEN`. Roles are deliberately coarse: `USER` can chat, `ADMIN` can additionally run
 server-only admin commands such as `/health`.
@@ -91,7 +98,8 @@ deduplicated by `messageId`, own messages are rendered as `Вы`, and user add/r
 are appended as service events instead of ordinary chat text.
 
 Room membership lives on the server. `general` always exists, room creation is idempotent through
-`ROOM_JOIN`, and clients that try to send to a room before joining receive an explicit `ERROR`.
+`ROOM_JOIN`, distinct rooms are capped at 1,000, and clients that try to send to a room before
+joining receive an explicit `ERROR`.
 
 ## History Store
 
@@ -99,9 +107,10 @@ History is optional and enabled through `ChatServerConfig.withHistory(...)` or s
 `--history`. The store is a UTF-8 JSONL file where each line is a versioned `ChatMessage`.
 
 - `ROOM_TEXT` and `PRIVATE_TEXT` are persistable.
-- The server keeps a bounded in-memory view and rewrites the file after saves to enforce rotation.
-- Invalid/corrupt lines are skipped at startup so one bad record does not prevent the server from
-  starting.
+- The server keeps a bounded in-memory view and atomically replaces the file after saves.
+- File size, individual frame size, and symbolic-link traversal are rejected before processing.
+- Invalid/corrupt lines, including malformed UTF-8 records, are skipped at startup so one bad record
+  does not prevent the server from starting.
 - Legacy unversioned `TEXT` records are migrated to current `ROOM_TEXT/general` records at load time.
 - Known rooms can be recovered from stored room messages.
 - On room join the server replays the last `historyReplayLimit` room messages to that client.

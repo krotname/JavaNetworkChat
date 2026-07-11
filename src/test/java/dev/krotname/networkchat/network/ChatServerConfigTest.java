@@ -4,8 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class ChatServerConfigTest {
@@ -16,6 +19,7 @@ class ChatServerConfigTest {
     ChatServerConfig configuredPort = ChatServerConfig.ofPort(0);
 
     assertEquals(ChatServerConfig.DEFAULT_PORT, defaults.port());
+    assertEquals(ChatServerConfig.DEFAULT_BIND_ADDRESS, defaults.bindAddress());
     assertEquals(ChatServerConfig.DEFAULT_MAX_CLIENTS, defaults.maxClients());
     assertEquals(0, configuredPort.port());
     assertEquals(ChatServerConfig.DEFAULT_MAX_CLIENTS, configuredPort.maxClients());
@@ -23,12 +27,9 @@ class ChatServerConfigTest {
 
   @Test
   void convertsSocketTimeoutsForServerUse() {
-    ChatServerConfig disabledTimeouts = new ChatServerConfig(1500, 1, Duration.ZERO, Duration.ZERO);
     ChatServerConfig roundedTimeouts =
         new ChatServerConfig(1500, 1, Duration.ofNanos(1), Duration.ofNanos(1));
 
-    assertEquals(0, disabledTimeouts.handshakeTimeoutMillis());
-    assertEquals(0, disabledTimeouts.readTimeoutMillis());
     assertEquals(1, roundedTimeouts.handshakeTimeoutMillis());
     assertEquals(1, roundedTimeouts.readTimeoutMillis());
   }
@@ -46,19 +47,32 @@ class ChatServerConfigTest {
         () -> new ChatServerConfig(1500, 0, Duration.ZERO, Duration.ZERO));
     assertThrows(
         IllegalArgumentException.class,
+        () -> new ChatServerConfig(1500, 1, Duration.ZERO, Duration.ofSeconds(1)));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new ChatServerConfig(1500, 1, Duration.ofSeconds(1), Duration.ZERO));
+    assertThrows(
+        IllegalArgumentException.class,
         () -> new ChatServerConfig(1500, 1, Duration.ofMillis(-1), Duration.ZERO));
     assertThrows(
         IllegalArgumentException.class,
         () -> new ChatServerConfig(1500, 1, Duration.ZERO, Duration.ofMillis(-1)));
     assertThrows(
-        NullPointerException.class, () -> new ChatServerConfig(1500, 1, null, Duration.ZERO));
+        NullPointerException.class,
+        () -> new ChatServerConfig(1500, 1, null, Duration.ofSeconds(1)));
     assertThrows(
-        NullPointerException.class, () -> new ChatServerConfig(1500, 1, Duration.ZERO, null));
+        NullPointerException.class,
+        () -> new ChatServerConfig(1500, 1, Duration.ofSeconds(1), null));
     assertThrows(
         IllegalArgumentException.class,
         () ->
             new ChatServerConfig(
-                1500, 1, Duration.ofMillis((long) Integer.MAX_VALUE + 1L), Duration.ZERO));
+                1500, 1, Duration.ofMillis((long) Integer.MAX_VALUE + 1L), Duration.ofSeconds(1)));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new ChatServerConfig(
+                1500, 1, Duration.ofSeconds(Long.MAX_VALUE), Duration.ofSeconds(1)));
   }
 
   @Test
@@ -95,5 +109,41 @@ class ChatServerConfigTest {
     assertThrows(IllegalArgumentException.class, () -> TlsServerConfig.enabled(null, "changeit"));
     assertThrows(
         IllegalArgumentException.class, () -> TlsServerConfig.enabled(Path.of("chat.p12"), ""));
+  }
+
+  @Test
+  void parsesServerOptionsAndReadsTlsSecretsOnlyFromEnvironment() {
+    ChatServerConfig config =
+        ChatServer.parseConfig(
+            new String[] {"--port", "1600", "--bind", "0.0.0.0", "--tls-keystore", "chat.p12"},
+            Map.of(
+                ChatServer.ENV_TLS_KEYSTORE_PASSWORD,
+                "store-secret",
+                ChatServer.ENV_TLS_KEY_PASSWORD,
+                "key-secret"));
+
+    assertEquals(1600, config.port());
+    assertEquals("0.0.0.0", config.bindAddress());
+    assertEquals("store-secret", config.tls().keyStorePassword());
+    assertEquals("key-secret", config.tls().keyPassword());
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ChatServer.parseConfig(new String[] {"--tls-password", "secret"}, Map.of()));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ChatServer.parseConfig(new String[] {"--port"}, Map.of()));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ChatServer.parseConfig(new String[] {"--unknown", "value"}, Map.of()));
+  }
+
+  @Test
+  void failedBindDoesNotLeaveServerMarkedRunning() throws Exception {
+    try (ServerSocket blocker =
+            new ServerSocket(0, 1, InetAddress.getByName(ChatServerConfig.DEFAULT_BIND_ADDRESS));
+        ChatServer server = new ChatServer(blocker.getLocalPort())) {
+      assertThrows(java.io.IOException.class, server::start);
+      assertFalse(server.isRunning());
+    }
   }
 }

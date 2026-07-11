@@ -284,7 +284,7 @@ Acceptance:
 Цель: подготовить проект к использованию за пределами учебного запуска из IDE.
 
 - Добавлен TLS mode для server/client через JSSE keystore/truststore.
-- Добавлена простая account-модель: username + salted SHA-256 token hash.
+- Добавлена account-модель: username + salted PBKDF2-HMAC-SHA256 token hash.
 - Добавлены роли: `USER`/`ADMIN`.
 - Добавлен package build: Windows zip с `.bat` launchers.
 - Добавлены release checksums и provenance metadata.

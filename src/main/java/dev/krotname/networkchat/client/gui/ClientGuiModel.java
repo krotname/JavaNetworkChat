@@ -120,15 +120,16 @@ public final class ClientGuiModel {
 
   public synchronized boolean addTextMessage(ChatMessage message, String currentUserName) {
     Objects.requireNonNull(message, "message");
-    String messageId = message.messageId();
-    if (messageId != null && !seenMessageIds.add(messageId)) {
-      return false;
-    }
     boolean ownMessage =
         currentUserName != null
             && message.sender() != null
             && currentUserName.equals(message.sender());
-    appendTimelineEntry(TimelineEntry.text(message, ownMessage));
+    TimelineEntry entry = TimelineEntry.text(message, ownMessage);
+    String messageId = message.messageId();
+    if (messageId != null && !seenMessageIds.add(messageId)) {
+      return false;
+    }
+    appendTimelineEntry(entry);
     return true;
   }
 
@@ -141,12 +142,12 @@ public final class ClientGuiModel {
     seenMessageIds.clear();
   }
 
-  public synchronized void addUser(String newUserName) {
-    allUserNames.add(newUserName);
+  public synchronized boolean addUser(String newUserName) {
+    return allUserNames.add(newUserName);
   }
 
-  public synchronized void deleteUser(String userName) {
-    allUserNames.remove(userName);
+  public synchronized boolean deleteUser(String userName) {
+    return allUserNames.remove(userName);
   }
 
   public synchronized int getUserCount() {
@@ -182,7 +183,10 @@ public final class ClientGuiModel {
   private void appendTimelineEntry(TimelineEntry entry) {
     timelineEntries.add(entry);
     if (timelineEntries.size() > MAX_TIMELINE_ENTRIES) {
-      timelineEntries.remove(0);
+      TimelineEntry removed = timelineEntries.remove(0);
+      if (removed.messageId() != null) {
+        seenMessageIds.remove(removed.messageId());
+      }
     }
   }
 
@@ -198,13 +202,46 @@ public final class ClientGuiModel {
     if (value == null) {
       return "null";
     }
-    return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\"";
+    StringBuilder escaped = new StringBuilder(value.length() + 2).append('"');
+    for (int index = 0; index < value.length(); index++) {
+      char character = value.charAt(index);
+      switch (character) {
+        case '"' -> escaped.append("\\\"");
+        case '\\' -> escaped.append("\\\\");
+        case '\b' -> escaped.append("\\b");
+        case '\f' -> escaped.append("\\f");
+        case '\n' -> escaped.append("\\n");
+        case '\r' -> escaped.append("\\r");
+        case '\t' -> escaped.append("\\t");
+        default -> {
+          if (character < 0x20) {
+            escaped.append(String.format(Locale.ROOT, "\\u%04x", (int) character));
+          } else {
+            escaped.append(character);
+          }
+        }
+      }
+    }
+    return escaped.append('"').toString();
   }
 
   private String csv(String value) {
     if (value == null) {
       return "";
     }
-    return "\"" + value.replace("\"", "\"\"") + "\"";
+    String safeValue = startsSpreadsheetFormula(value) ? "'" + value : value;
+    return "\"" + safeValue.replace("\"", "\"\"") + "\"";
+  }
+
+  private boolean startsSpreadsheetFormula(String value) {
+    int index = 0;
+    while (index < value.length() && Character.isWhitespace(value.charAt(index))) {
+      index++;
+    }
+    if (index >= value.length()) {
+      return false;
+    }
+    char first = value.charAt(index);
+    return first == '=' || first == '+' || first == '-' || first == '@';
   }
 }

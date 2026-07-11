@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class AccountStoreTest {
+  private static final String SALT = "0123456789abcdef0123456789abcdef";
   @TempDir private Path tempDir;
 
   @Test
@@ -20,7 +21,23 @@ class AccountStoreTest {
     Path accountFile = tempDir.resolve("accounts.csv");
     Files.writeString(
         accountFile,
-        "# comment\n\nalice,USER,salt," + AccountStore.hashToken("salt", "secret") + "\n",
+        "# comment\n\nalice,USER," + SALT + "," + AccountStore.hashToken(SALT, "secret") + "\n",
+        StandardCharsets.UTF_8);
+
+    AccountStore store = AccountStore.load(accountFile);
+
+    assertEquals(UserRole.USER, store.authenticate("alice", "secret").orElseThrow());
+    assertFalse(store.authenticate("alice", "wrong").isPresent());
+  }
+
+  @Test
+  void authenticatesCanonicalLegacySha256RowsDuringMigration() throws Exception {
+    Path accountFile = tempDir.resolve("legacy-accounts.csv");
+    Files.writeString(
+        accountFile,
+        "alice,USER,"
+            + SALT
+            + ",8917ae349b3abd701ffcd51e40fd8aacca08f7ed11cc2688a79f72ab380e7460\n",
         StandardCharsets.UTF_8);
 
     AccountStore store = AccountStore.load(accountFile);
@@ -61,19 +78,49 @@ class AccountStoreTest {
     Path invalidUser = tempDir.resolve("invalid-user.csv");
     Files.writeString(
         duplicateUsers,
-        "alice,USER,salt,"
-            + AccountStore.hashToken("salt", "secret")
+        "alice,USER,"
+            + SALT
+            + ","
+            + AccountStore.hashToken(SALT, "secret")
             + "\n"
-            + "alice,ADMIN,other,"
-            + AccountStore.hashToken("other", "secret")
+            + "alice,ADMIN,fedcba9876543210fedcba9876543210,"
+            + AccountStore.hashToken("fedcba9876543210fedcba9876543210", "secret")
             + "\n",
         StandardCharsets.UTF_8);
     Files.writeString(
         invalidUser,
-        "al,USER,salt," + AccountStore.hashToken("salt", "secret") + "\n",
+        "al,USER," + SALT + "," + AccountStore.hashToken(SALT, "secret") + "\n",
         StandardCharsets.UTF_8);
 
     assertThrows(IllegalArgumentException.class, () -> AccountStore.load(duplicateUsers));
     assertThrows(IllegalArgumentException.class, () -> AccountStore.load(invalidUser));
+  }
+
+  @Test
+  void rejectsWeakOrMalformedHashMaterial() throws Exception {
+    Path weakSalt = tempDir.resolve("weak-salt.csv");
+    Path malformedHash = tempDir.resolve("malformed-hash.csv");
+    Files.writeString(weakSalt, "alice,USER,salt," + "0".repeat(64), StandardCharsets.UTF_8);
+    Files.writeString(
+        malformedHash, "alice,USER," + SALT + "," + "z".repeat(64), StandardCharsets.UTF_8);
+
+    assertThrows(IllegalArgumentException.class, () -> AccountStore.load(weakSalt));
+    assertThrows(IllegalArgumentException.class, () -> AccountStore.load(malformedHash));
+  }
+
+  @Test
+  void rejectsOversizedAccountFile() throws Exception {
+    Path oversized = tempDir.resolve("oversized.csv");
+    Files.writeString(oversized, "x".repeat(1024 * 1024 + 1), StandardCharsets.UTF_8);
+
+    assertThrows(java.io.IOException.class, () -> AccountStore.load(oversized));
+  }
+
+  @Test
+  void rejectsMalformedUtf8AccountFiles() throws Exception {
+    Path malformed = tempDir.resolve("malformed-utf8.csv");
+    Files.write(malformed, new byte[] {'#', ' ', (byte) 0xc3, 0x28, '\n'});
+
+    assertThrows(java.io.IOException.class, () -> AccountStore.load(malformed));
   }
 }

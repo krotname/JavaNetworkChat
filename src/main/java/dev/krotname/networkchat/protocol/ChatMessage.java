@@ -21,12 +21,16 @@ public record ChatMessage(
     String recipient) {
   public static final int PROTOCOL_VERSION = 1;
   public static final int MAX_DATA_LENGTH = 2048;
+  public static final int MAX_METADATA_LENGTH = 64;
   public static final String GENERAL_ROOM = "general";
 
   public ChatMessage {
     Objects.requireNonNull(type, "type");
     if (data != null && data.length() > MAX_DATA_LENGTH) {
       throw new IllegalArgumentException("Message data is too long");
+    }
+    if (data != null && containsUnsafeControl(data)) {
+      throw new IllegalArgumentException("Message data contains unsafe control characters");
     }
     if (requiresTextData(type) && (data == null || data.isBlank())) {
       throw new IllegalArgumentException("Text message data is required");
@@ -38,11 +42,12 @@ public record ChatMessage(
     if (type == MessageType.PRIVATE_TEXT && (recipient == null || recipient.isBlank())) {
       throw new IllegalArgumentException("Private message recipient is required");
     }
-    if (room != null) {
-      room = room.trim();
-    }
-    if (recipient != null) {
-      recipient = recipient.trim();
+    sender = normalizeMetadata(sender, "sender");
+    messageId = normalizeMetadata(messageId, "messageId");
+    room = normalizeMetadata(room, "room");
+    recipient = normalizeMetadata(recipient, "recipient");
+    if (timestamp < 0) {
+      throw new IllegalArgumentException("Timestamp must not be negative");
     }
   }
 
@@ -145,5 +150,25 @@ public record ChatMessage(
     return type == MessageType.TEXT
         || type == MessageType.ROOM_TEXT
         || type == MessageType.PRIVATE_TEXT;
+  }
+
+  private static String normalizeMetadata(String value, String fieldName) {
+    if (value == null) {
+      return null;
+    }
+    String normalized = value.trim();
+    if (normalized.length() > MAX_METADATA_LENGTH
+        || normalized.chars().anyMatch(Character::isISOControl)) {
+      throw new IllegalArgumentException(fieldName + " is invalid");
+    }
+    return normalized;
+  }
+
+  private static boolean containsUnsafeControl(String value) {
+    return value
+        .chars()
+        .anyMatch(
+            character ->
+                Character.isISOControl(character) && character != '\n' && character != '\t');
   }
 }

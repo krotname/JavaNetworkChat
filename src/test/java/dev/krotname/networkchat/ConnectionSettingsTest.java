@@ -12,14 +12,14 @@ import org.junit.jupiter.api.Test;
 class ConnectionSettingsTest {
 
   @Test
-  void parsesAndTrimsConnectionSettings() {
+  void trimsConnectionFieldsButPreservesTheExactAccountToken() {
     ConnectionSettings settings =
         ConnectionSettings.fromInput(" localhost ", " 1500 ", " alice ", " token ");
 
     assertEquals("localhost", settings.serverAddress());
     assertEquals(1500, settings.serverPort());
     assertEquals("alice", settings.userName());
-    assertEquals("token", settings.accountToken());
+    assertEquals(" token ", settings.accountToken());
   }
 
   @Test
@@ -30,6 +30,9 @@ class ConnectionSettingsTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> ConnectionSettings.fromInput("localhost", "70000", "alice", ""));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ConnectionSettings.fromInput("localhost", "0", "alice", ""));
   }
 
   @Test

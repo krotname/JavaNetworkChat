@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.krotname.networkchat.client.gui.ClientGuiModel;
 import dev.krotname.networkchat.protocol.ChatMessage;
 import dev.krotname.networkchat.protocol.MessageType;
@@ -14,8 +15,9 @@ class ClientGuiModelTest {
   @Test
   void tracksUsersAndMessages() {
     ClientGuiModel model = new ClientGuiModel();
-    model.addUser("alice");
-    model.addUser("bob");
+    assertTrue(model.addUser("alice"));
+    assertFalse(model.addUser("alice"));
+    assertTrue(model.addUser("bob"));
     ChatMessage message = new ChatMessage(MessageType.TEXT, "hello", "alice", 1L, "id-1");
     assertTrue(model.addTextMessage(message, "alice"));
 
@@ -25,9 +27,9 @@ class ClientGuiModelTest {
     assertEquals(2, model.getAllUserNames().size());
     assertEquals(2, model.getUserCount());
 
-    model.deleteUser("alice");
+    assertTrue(model.deleteUser("alice"));
     assertEquals(1, model.getAllUserNames().size());
-    model.deleteUser("unknown");
+    assertFalse(model.deleteUser("unknown"));
 
     model.clearUsers();
     assertEquals(0, model.getUserCount());
@@ -74,6 +76,33 @@ class ClientGuiModelTest {
     model.clearTimeline();
 
     assertEquals(0, model.getTimelineEntries().size());
+  }
+
+  @Test
+  void forgetsDeduplicationIdsWhenTheirTimelineEntriesAreEvicted() {
+    ClientGuiModel model = new ClientGuiModel();
+    ChatMessage first = new ChatMessage(MessageType.TEXT, "first", "alice", 1L, "first-id");
+    assertTrue(model.addTextMessage(first, "bob"));
+    for (int index = 0; index < ClientGuiModel.MAX_TIMELINE_ENTRIES; index++) {
+      model.addTextMessage(
+          new ChatMessage(MessageType.TEXT, "message " + index, "alice", 2L, "id-" + index), "bob");
+    }
+
+    assertTrue(model.addTextMessage(first, "bob"));
+    assertEquals(ClientGuiModel.MAX_TIMELINE_ENTRIES, model.getTimelineEntries().size());
+  }
+
+  @Test
+  void exportsValidJsonAndNeutralizesSpreadsheetFormulas() throws Exception {
+    ClientGuiModel model = new ClientGuiModel();
+    model.addServiceMessage("tab\tcarriage\rbackspace\bform-feed\f");
+    model.addTextMessage(new ChatMessage(MessageType.TEXT, "=2+2", "alice", 1L, "formula"), "bob");
+
+    String json = model.exportTimelineAsJson();
+    String csv = model.exportTimelineAsCsv();
+
+    assertEquals(2, new ObjectMapper().readTree(json).size());
+    assertTrue(csv.contains("\"'=2+2\""));
   }
 
   @Test
