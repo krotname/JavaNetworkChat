@@ -229,12 +229,17 @@ tasks.register<JavaExec>("runGuiClient") {
 
 tasks.register<JavaExec>("createAccount") {
     group = "application"
-    description = "Print one accounts.csv row: --args=\"alice USER secret\""
+    description = "Read a token from stdin and print one accounts.csv row: --args=\"alice USER\""
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass.set("dev.krotname.networkchat.network.AccountTool")
+    standardInput = System.`in`
 }
 
 val releasePackageName = "network-chat-${project.version}"
+val releaseProjectName = project.name
+val releaseProjectVersion = project.version.toString()
+val releaseProjectGroup = project.group.toString()
+val releaseRuntimeClasspath = configurations.runtimeClasspath.get()
 val releaseStagingDir = layout.buildDirectory.dir("release/staging/$releasePackageName")
 val releaseDir = layout.buildDirectory.dir("release")
 
@@ -296,8 +301,8 @@ tasks.register("releaseProvenance") {
                 }
               ],
               "metadata": {
-                "project": "${project.name}",
-                "version": "${project.version}",
+                "project": "$releaseProjectName",
+                "version": "$releaseProjectVersion",
                 "buildStartedOn": "${Instant.now()}"
               }
             }
@@ -331,10 +336,12 @@ tasks.register("releaseChecksums") {
 tasks.register("releaseSbom") {
     group = "distribution"
     description = "Write a CycloneDX SBOM for the release runtime classpath"
+    inputs.files(releaseRuntimeClasspath)
+    inputs.property("projectVersion", releaseProjectVersion)
     outputs.file(sbomFile)
     doLast {
         val components =
-            configurations.runtimeClasspath.get().resolvedConfiguration.resolvedArtifacts
+            releaseRuntimeClasspath.resolvedConfiguration.resolvedArtifacts
                 .sortedWith(compareBy({ it.moduleVersion.id.group }, { it.name }, { it.moduleVersion.id.version }))
                 .map {
                     val id = it.moduleVersion.id
@@ -351,7 +358,7 @@ tasks.register("releaseSbom") {
             mapOf(
                 "bomFormat" to "CycloneDX",
                 "specVersion" to "1.6",
-                "serialNumber" to "urn:uuid:${UUID.nameUUIDFromBytes("${project.name}:${project.version}".toByteArray())}",
+                "serialNumber" to "urn:uuid:${UUID.nameUUIDFromBytes("$releaseProjectName:$releaseProjectVersion".toByteArray())}",
                 "version" to 1,
                 "metadata" to
                     mapOf(
@@ -359,9 +366,9 @@ tasks.register("releaseSbom") {
                         "component" to
                             mapOf(
                                 "type" to "application",
-                                "name" to project.name,
-                                "version" to project.version.toString(),
-                                "purl" to "pkg:maven/${project.group}/${project.name}@${project.version}",
+                                "name" to releaseProjectName,
+                                "version" to releaseProjectVersion,
+                                "purl" to "pkg:maven/$releaseProjectGroup/$releaseProjectName@$releaseProjectVersion",
                             ),
                     ),
                 "components" to components,

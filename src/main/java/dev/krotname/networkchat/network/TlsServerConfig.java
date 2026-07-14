@@ -16,6 +16,14 @@ public record TlsServerConfig(
       if (keyPassword == null || keyPassword.isBlank()) {
         keyPassword = keyStorePassword;
       }
+    } else {
+      if (keyStoreFile != null
+          || (keyStorePassword != null && !keyStorePassword.isBlank())
+          || (keyPassword != null && !keyPassword.isBlank())) {
+        throw new IllegalArgumentException("Disabled TLS must not contain keystore settings");
+      }
+      keyStorePassword = "";
+      keyPassword = "";
     }
   }
 

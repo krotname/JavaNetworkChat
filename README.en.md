@@ -41,8 +41,9 @@ Network Chat is a Java 21 chat application over TCP sockets with:
 
 Server and clients can also be run directly with Java by building jars from Gradle.
 
-The default server port is `1500`. Programmatic server startup can use `ChatServerConfig` to set the
-port, maximum client count, handshake timeout, and post-handshake read timeout.
+The default server port is `1500`, and the server binds only to `127.0.0.1`. Programmatic server
+startup can use `ChatServerConfig` to set the bind address, port, maximum client count, handshake
+timeout, and post-handshake read timeout.
 
 To enable file-backed history:
 
@@ -53,10 +54,14 @@ To enable file-backed history:
 To enable accounts, first generate rows for `accounts.csv`:
 
 ```bash
-./gradlew createAccount --args="alice USER secret" >> build/accounts.csv
-./gradlew createAccount --args="admin ADMIN admin-secret" >> build/accounts.csv
+./gradlew --quiet createAccount --args="alice USER" >> build/accounts.csv
+./gradlew --quiet createAccount --args="admin ADMIN" >> build/accounts.csv
 ./gradlew runServer --args="--port 1500 --accounts build/accounts.csv"
 ```
+
+The command prompts for the token through the console/stdin, so it is not exposed in the process
+arguments. New rows contain a versioned PBKDF2-HMAC-SHA256 hash. Canonical legacy rows that used
+fast SHA-256 remain usable for migration, but should be replaced with `createAccount`.
 
 Clients send the token through the GUI `Token` field or the `NETWORK_CHAT_TOKEN` environment
 variable. Admin users can send `/health` and receive a private server status response.
@@ -64,10 +69,16 @@ variable. Admin users can send `/health` and receive a private server status res
 To enable TLS, create a Java keystore for the server:
 
 ```bash
+export NETWORK_CHAT_TLS_KEYSTORE_PASSWORD='changeit'
+export NETWORK_CHAT_TLS_KEY_PASSWORD='changeit'
 keytool -genkeypair -alias network-chat -keyalg RSA -keysize 3072 -validity 365 \
-  -keystore build/network-chat.p12 -storetype PKCS12 -storepass changeit
-./gradlew runServer --args="--port 1500 --tls-keystore build/network-chat.p12 --tls-password changeit"
+  -keystore build/network-chat.p12 -storetype PKCS12 \
+  -storepass:env NETWORK_CHAT_TLS_KEYSTORE_PASSWORD
+./gradlew runServer --args="--port 1500 --tls-keystore build/network-chat.p12"
 ```
+
+For remote access, explicitly add `--bind 0.0.0.0` (or a specific address) and always enable TLS
+and accounts. The certificate must contain a SAN for the host name/address used by clients.
 
 Clients enable TLS through environment variables:
 
@@ -98,7 +109,7 @@ gh attestation verify network-chat-*-windows.zip --repo krotname/JavaNetworkChat
 The compact architecture contract is documented in [docs/architecture.md](docs/architecture.md).
 
 - `ChatServer` accepts TCP connections and handles clients in a bounded executor.
-- `ChatConnection` reads and writes one-line UTF-8 JSON frames.
+- `ChatConnection` reads and writes UTF-8 JSON frames capped at 8 KiB with a total deadline.
 - `ChatProtocol` serializes `ChatMessage`.
 - `ChatMessage` carries `protocolVersion`; unversioned clients receive an explicit `ERROR`.
 - For `TEXT` messages, `data` contains only raw text and `sender` contains the author.
@@ -109,9 +120,8 @@ The compact architecture contract is documented in [docs/architecture.md](docs/a
 - The GUI keeps a bounded local timeline for the current session, renders `USER_ADDED`/`USER_REMOVED`
   as service events, uses `messageId` for deduplication, and supports search by text, sender,
   date/timestamp, room, recipient plus JSON/CSV export.
-- When history is enabled, the server stores `ROOM_TEXT`/`PRIVATE_TEXT` frames as JSONL, bounds the
-  history size, migrates legacy unversioned `TEXT` records, and replays recent room messages on
-  join.
+- When history is enabled, the server atomically stores `ROOM_TEXT`/`PRIVATE_TEXT` frames in bounded
+  JSONL, migrates legacy unversioned `TEXT` records, and replays recent room messages on join.
 - When accounts are enabled, the server accepts only `USER_NAME` frames with a valid token; roles are
   used for admin-only commands.
 - TLS is enabled through server configuration and client environment variables.

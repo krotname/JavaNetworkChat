@@ -65,4 +65,52 @@ class ChatProtocolTest {
   void decodeRejectsInvalidFrame() {
     assertThrows(IOException.class, () -> ChatProtocol.decode("{\"broken\":true}"));
   }
+
+  @Test
+  void decodeRejectsDuplicateAndOversizedFrames() {
+    assertThrows(
+        IOException.class,
+        () ->
+            ChatProtocol.decode(
+                "{\"type\":\"TEXT\",\"type\":\"TEXT\",\"data\":\"hello\","
+                    + "\"sender\":\"alice\",\"timestamp\":1,\"messageId\":\"id\"}"));
+    assertThrows(
+        IOException.class,
+        () -> ChatProtocol.decode("x".repeat(ChatProtocol.MAX_FRAME_LENGTH + 1)));
+  }
+
+  @Test
+  void decodeRejectsTrailingJsonTokens() throws IOException {
+    String validFrame = ChatProtocol.encode(ChatMessage.text("hello", "alice"));
+
+    assertThrows(IOException.class, () -> ChatProtocol.decode(validFrame + " {}"));
+  }
+
+  @Test
+  void messageRejectsUnsafeMetadataAndTimestamp() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new ChatMessage(
+                MessageType.ROOM_TEXT,
+                "hello",
+                "alice\nadmin",
+                1,
+                "id",
+                ChatMessage.PROTOCOL_VERSION,
+                "general",
+                null));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new ChatMessage(
+                MessageType.ROOM_TEXT,
+                "hello",
+                "alice",
+                -1,
+                "id",
+                ChatMessage.PROTOCOL_VERSION,
+                "general",
+                null));
+  }
 }

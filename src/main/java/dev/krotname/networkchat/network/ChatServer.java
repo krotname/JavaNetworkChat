@@ -6,11 +6,13 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -30,6 +32,10 @@ public final class ChatServer implements AutoCloseable {
   private static final Logger LOG = Logger.getLogger(ChatServer.class.getName());
   private static final int MIN_ROOM_NAME_LENGTH = 1;
   private static final int MAX_ROOM_NAME_LENGTH = 64;
+  private static final int MAX_HANDSHAKE_ATTEMPTS = 5;
+  static final int MAX_ROOMS = 1_000;
+  static final String ENV_TLS_KEYSTORE_PASSWORD = "NETWORK_CHAT_TLS_KEYSTORE_PASSWORD";
+  static final String ENV_TLS_KEY_PASSWORD = "NETWORK_CHAT_TLS_KEY_PASSWORD";
 
   private final ChatServerConfig config;
   private final ChatHistoryStore historyStore;
@@ -43,6 +49,7 @@ public final class ChatServer implements AutoCloseable {
   private final ExecutorService acceptorExecutor =
       Executors.newSingleThreadExecutor(daemonThreadFactory("chat-acceptor"));
   private final AtomicBoolean running = new AtomicBoolean(false);
+  private final AtomicBoolean closed = new AtomicBoolean(false);
   private final CountDownLatch startSignal = new CountDownLatch(1);
   private volatile ServerSocket serverSocket;
 
@@ -58,8 +65,12 @@ public final class ChatServer implements AutoCloseable {
             : ChatHistoryStore.open(config.historyFile(), config.historyLimit());
     this.accountStore =
         config.accountFile() == null ? AccountStore.disabled() : loadAccountStore(config);
+    roomMembers.put(ChatMessage.GENERAL_ROOM, ConcurrentHashMap.newKeySet());
     for (String roomName : historyStore.knownRooms()) {
-      roomMembers.put(roomName, ConcurrentHashMap.newKeySet());
+      if (roomMembers.size() >= MAX_ROOMS) {
+        break;
+      }
+      roomMembers.putIfAbsent(roomName, ConcurrentHashMap.newKeySet());
     }
     this.clientExecutor =
         new ThreadPoolExecutor(
@@ -81,44 +92,76 @@ public final class ChatServer implements AutoCloseable {
     }
   }
 
-  private static ChatServerConfig parseConfig(String[] args) {
+  static ChatServerConfig parseConfig(String[] args) {
+    return parseConfig(args, System.getenv());
+  }
+
+  static ChatServerConfig parseConfig(String[] args, Map<String, String> environment) {
+    Objects.requireNonNull(args, "args");
+    Objects.requireNonNull(environment, "environment");
     ChatServerConfig parsedConfig = ChatServerConfig.defaultConfig();
     Path tlsKeyStoreFile = null;
-    String tlsKeyStorePassword = null;
-    String tlsKeyPassword = null;
+    if (args.length == 1 && !args[0].startsWith("--")) {
+      return parsedConfig.withPort(Integer.parseInt(args[0]));
+    }
     for (int i = 0; i < args.length; i++) {
       String arg = args[i];
-      if ("--port".equalsIgnoreCase(arg) && i + 1 < args.length) {
-        parsedConfig = parsedConfig.withPort(Integer.parseInt(args[++i]));
-      } else if ("--history".equalsIgnoreCase(arg) && i + 1 < args.length) {
-        parsedConfig = parsedConfig.withHistory(Path.of(args[++i]));
-      } else if ("--accounts".equalsIgnoreCase(arg) && i + 1 < args.length) {
-        parsedConfig = parsedConfig.withAccounts(Path.of(args[++i]));
-      } else if ("--tls-keystore".equalsIgnoreCase(arg) && i + 1 < args.length) {
-        tlsKeyStoreFile = Path.of(args[++i]);
-      } else if ("--tls-password".equalsIgnoreCase(arg) && i + 1 < args.length) {
-        tlsKeyStorePassword = args[++i];
-      } else if ("--tls-key-password".equalsIgnoreCase(arg) && i + 1 < args.length) {
-        tlsKeyPassword = args[++i];
-      } else if (args.length == 1) {
-        parsedConfig = parsedConfig.withPort(Integer.parseInt(arg));
+      switch (arg.toLowerCase(java.util.Locale.ROOT)) {
+        case "--port" ->
+            parsedConfig = parsedConfig.withPort(Integer.parseInt(nextArg(args, ++i, arg)));
+        case "--bind" -> parsedConfig = parsedConfig.withBindAddress(nextArg(args, ++i, arg));
+        case "--history" ->
+            parsedConfig = parsedConfig.withHistory(Path.of(nextArg(args, ++i, arg)));
+        case "--accounts" ->
+            parsedConfig = parsedConfig.withAccounts(Path.of(nextArg(args, ++i, arg)));
+        case "--tls-keystore" -> tlsKeyStoreFile = Path.of(nextArg(args, ++i, arg));
+        case "--tls-password", "--tls-key-password" ->
+            throw new IllegalArgumentException(
+                arg
+                    + " exposes secrets in the process list; use TLS password environment variables");
+        default -> throw new IllegalArgumentException("Unknown server argument: " + arg);
       }
     }
     if (tlsKeyStoreFile != null) {
       parsedConfig =
           parsedConfig.withTls(
-              new TlsServerConfig(true, tlsKeyStoreFile, tlsKeyStorePassword, tlsKeyPassword));
+              new TlsServerConfig(
+                  true,
+                  tlsKeyStoreFile,
+                  environment.get(ENV_TLS_KEYSTORE_PASSWORD),
+                  environment.get(ENV_TLS_KEY_PASSWORD)));
     }
     return parsedConfig;
   }
 
-  public void start() throws IOException {
+  private static String nextArg(String[] args, int index, String option) {
+    if (index >= args.length || args[index].isBlank() || args[index].startsWith("--")) {
+      throw new IllegalArgumentException("Missing value for " + option);
+    }
+    return args[index];
+  }
+
+  public synchronized void start() throws IOException {
+    if (closed.get()) {
+      throw new IllegalStateException("A closed chat server cannot be restarted");
+    }
     if (!running.compareAndSet(false, true)) {
       return;
     }
-    serverSocket = ChatSockets.openServerSocket(config);
-    acceptorExecutor.execute(this::acceptLoop);
-    startSignal.countDown();
+    ServerSocket openedSocket = null;
+    try {
+      openedSocket = ChatSockets.openServerSocket(config);
+      serverSocket = openedSocket;
+      acceptorExecutor.execute(this::acceptLoop);
+      startSignal.countDown();
+    } catch (IOException | RuntimeException ex) {
+      running.set(false);
+      closeServerSocket(openedSocket);
+      if (serverSocket == openedSocket) {
+        serverSocket = null;
+      }
+      throw ex;
+    }
     LOG.info(
         StructuredLog.event(
             "server_started",
@@ -140,7 +183,11 @@ public final class ChatServer implements AutoCloseable {
   private void acceptLoop() {
     while (running.get()) {
       try {
-        Socket socket = serverSocket.accept();
+        ServerSocket listeningSocket = serverSocket;
+        if (listeningSocket == null) {
+          break;
+        }
+        Socket socket = listeningSocket.accept();
         submitClient(socket);
       } catch (IOException ex) {
         if (running.get()) {
@@ -159,9 +206,12 @@ public final class ChatServer implements AutoCloseable {
   }
 
   private void rejectClient(Socket socket, String reason) {
-    try (socket;
-        ChatConnection connection = new ChatConnection(socket)) {
-      connection.send(ChatMessage.withData(MessageType.ERROR, reason, null));
+    try {
+      socket.setSoTimeout(config.handshakeTimeoutMillis());
+      try (socket;
+          ChatConnection connection = new ChatConnection(socket)) {
+        connection.send(ChatMessage.withData(MessageType.ERROR, reason, null));
+      }
     } catch (IOException ex) {
       LOG.log(Level.FINE, "Unable to send rejection to client", ex);
     }
@@ -173,11 +223,13 @@ public final class ChatServer implements AutoCloseable {
    */
   private void handleClient(Socket socket) {
     String userName = null;
+    ChatConnection sessionConnection = null;
     boolean active = false;
     try {
       socket.setSoTimeout(config.handshakeTimeoutMillis());
       try (socket;
           ChatConnection connection = new ChatConnection(socket)) {
+        sessionConnection = connection;
         HandshakeResult handshake = serverHandshake(connection);
         userName = handshake.userName();
         joinRoom(userName, ChatMessage.GENERAL_ROOM, connection);
@@ -196,7 +248,7 @@ public final class ChatServer implements AutoCloseable {
         activeClients.decrementAndGet();
       }
       if (userName != null) {
-        removeSession(userName);
+        removeSession(userName, sessionConnection);
       }
     }
   }
@@ -207,9 +259,10 @@ public final class ChatServer implements AutoCloseable {
    * <p>Reservation occurs atomically to avoid the duplicate-name race while handshaking.
    */
   private HandshakeResult serverHandshake(ChatConnection connection) throws IOException {
-    while (true) {
+    long deadline = System.nanoTime() + config.handshakeTimeout().toNanos();
+    for (int attempt = 0; attempt < MAX_HANDSHAKE_ATTEMPTS; attempt++) {
       connection.send(ChatMessage.withData(MessageType.NAME_REQUEST, null, null));
-      ChatMessage request = connection.receive();
+      ChatMessage request = connection.receive(remainingDuration(deadline));
       if (!isProtocolSupported(request)) {
         connection.send(unsupportedProtocolVersionError());
         continue;
@@ -240,10 +293,18 @@ public final class ChatServer implements AutoCloseable {
         }
         sessions.put(candidate, connection);
         roles.put(candidate, role);
-        connection.send(ChatMessage.withData(MessageType.NAME_ACCEPTED, null, null));
+        try {
+          connection.send(ChatMessage.withData(MessageType.NAME_ACCEPTED, null, null));
+        } catch (IOException ex) {
+          sessions.remove(candidate, connection);
+          roles.remove(candidate);
+          throw ex;
+        }
         return new HandshakeResult(candidate, role);
       }
     }
+    connection.send(ChatMessage.withData(MessageType.ERROR, "Too many handshake attempts", null));
+    throw new IOException("Too many handshake attempts");
   }
 
   private boolean isNameValid(String userName) {
@@ -266,7 +327,7 @@ public final class ChatServer implements AutoCloseable {
   /** Read messages from one client and broadcast normalized text messages to all clients. */
   private void serverMainLoop(ChatConnection connection, String userName) throws IOException {
     while (running.get()) {
-      ChatMessage message = connection.receive();
+      ChatMessage message = connection.receive(config.readTimeout());
       if (!isProtocolSupported(message)) {
         connection.send(unsupportedProtocolVersionError());
         continue;
@@ -293,8 +354,8 @@ public final class ChatServer implements AutoCloseable {
         MessageType.ROOM_TEXT,
         message.data(),
         userName,
-        message.timestamp(),
-        message.messageId(),
+        Instant.now().toEpochMilli(),
+        UUID.randomUUID().toString(),
         ChatMessage.PROTOCOL_VERSION,
         roomOrGeneral(message.room()),
         null);
@@ -315,6 +376,10 @@ public final class ChatServer implements AutoCloseable {
   private void handlePrivateText(ChatMessage message, String userName, ChatConnection connection)
       throws IOException {
     String recipient = message.recipient();
+    if (!AccountStore.isValidUserName(recipient)) {
+      connection.send(ChatMessage.withData(MessageType.ERROR, "Invalid recipient", null));
+      return;
+    }
     ChatConnection recipientConnection = sessions.get(recipient);
     if (recipientConnection == null) {
       connection.send(ChatMessage.withData(MessageType.ERROR, "Recipient is not connected", null));
@@ -325,20 +390,31 @@ public final class ChatServer implements AutoCloseable {
             MessageType.PRIVATE_TEXT,
             message.data(),
             userName,
-            message.timestamp(),
-            message.messageId(),
+            Instant.now().toEpochMilli(),
+            UUID.randomUUID().toString(),
             ChatMessage.PROTOCOL_VERSION,
             null,
             recipient);
-    historyStore.save(normalized);
     connection.send(normalized);
     if (recipientConnection != connection) {
-      recipientConnection.send(normalized);
+      try {
+        recipientConnection.send(normalized);
+      } catch (IOException ex) {
+        LOG.log(Level.WARNING, "Failed sending private message to " + recipient, ex);
+        removeSession(recipient, recipientConnection);
+        connection.send(
+            ChatMessage.withData(
+                MessageType.ERROR, "Recipient disconnected before delivery", null));
+        return;
+      }
     }
+    historyStore.save(normalized);
   }
 
   private boolean isHealthCommand(ChatMessage message) {
-    return message.data() != null && "/health".equalsIgnoreCase(message.data().trim());
+    return (message.type() == MessageType.TEXT || message.type() == MessageType.ROOM_TEXT)
+        && message.data() != null
+        && "/health".equalsIgnoreCase(message.data().trim());
   }
 
   private void handleHealthCommand(String userName, ChatConnection connection) throws IOException {
@@ -367,7 +443,17 @@ public final class ChatServer implements AutoCloseable {
       connection.send(ChatMessage.withData(MessageType.ERROR, "Invalid room name", null));
       return;
     }
-    boolean created = roomMembers.putIfAbsent(roomName, ConcurrentHashMap.newKeySet()) == null;
+    boolean created = false;
+    synchronized (roomMembers) {
+      if (!roomMembers.containsKey(roomName)) {
+        if (roomMembers.size() >= MAX_ROOMS) {
+          connection.send(ChatMessage.withData(MessageType.ERROR, "Room limit reached", null));
+          return;
+        }
+        roomMembers.put(roomName, ConcurrentHashMap.newKeySet());
+        created = true;
+      }
+    }
     if (created) {
       broadcast(ChatMessage.roomAdded(roomName), null);
     }
@@ -390,11 +476,21 @@ public final class ChatServer implements AutoCloseable {
 
   private void joinRoom(String userName, String roomName, ChatConnection connection)
       throws IOException {
-    roomMembers.computeIfAbsent(roomName, ignored -> ConcurrentHashMap.newKeySet()).add(userName);
-    connection.send(ChatMessage.roomJoined(roomName));
-    for (ChatMessage message :
-        historyStore.recentRoomMessages(roomName, config.historyReplayLimit())) {
-      connection.send(message);
+    if (sessions.get(userName) != connection) {
+      throw new IOException("Session is no longer active");
+    }
+    Set<String> members =
+        roomMembers.computeIfAbsent(roomName, ignored -> ConcurrentHashMap.newKeySet());
+    members.add(userName);
+    try {
+      connection.send(ChatMessage.roomJoined(roomName));
+      for (ChatMessage message :
+          historyStore.recentRoomMessages(roomName, config.historyReplayLimit())) {
+        connection.send(message);
+      }
+    } catch (IOException ex) {
+      members.remove(userName);
+      throw ex;
     }
   }
 
@@ -417,7 +513,7 @@ public final class ChatServer implements AutoCloseable {
         recipient.send(message);
       } catch (IOException ex) {
         LOG.log(Level.WARNING, "Failed sending to " + member, ex);
-        removeSession(member);
+        removeSession(member, recipient);
       }
     }
   }
@@ -456,47 +552,43 @@ public final class ChatServer implements AutoCloseable {
         }
       } catch (IOException ex) {
         LOG.log(Level.WARNING, "Failed sending to " + entry.getKey(), ex);
-        removeSession(entry.getKey());
+        removeSession(entry.getKey(), entry.getValue());
       }
     }
   }
 
-  private void removeSession(String userName) {
-    ChatConnection removed = sessions.remove(userName);
-    if (removed == null) {
-      return;
-    }
-    roles.remove(userName);
-    try {
-      removed.close();
-    } catch (IOException ex) {
-      LOG.log(Level.FINE, "Error closing connection", ex);
-    }
-    try {
-      broadcast(ChatMessage.withData(MessageType.USER_REMOVED, userName, null), null);
-    } catch (IOException ex) {
-      LOG.log(Level.FINE, "Unable to broadcast USER_REMOVED", ex);
-    }
-    for (Set<String> members : roomMembers.values()) {
-      members.remove(userName);
+  boolean removeSession(String userName, ChatConnection expectedConnection) {
+    synchronized (sessionsMonitor) {
+      if (expectedConnection == null || !sessions.remove(userName, expectedConnection)) {
+        return false;
+      }
+      roles.remove(userName);
+      for (Set<String> members : roomMembers.values()) {
+        members.remove(userName);
+      }
+      closeConnection(expectedConnection);
+      try {
+        broadcast(ChatMessage.withData(MessageType.USER_REMOVED, userName, null), null);
+      } catch (IOException ex) {
+        LOG.log(Level.FINE, "Unable to broadcast USER_REMOVED", ex);
+      }
+      return true;
     }
   }
 
   @Override
-  public void close() {
+  public synchronized void close() {
+    if (!closed.compareAndSet(false, true)) {
+      return;
+    }
     running.set(false);
-    try {
-      if (serverSocket != null) {
-        serverSocket.close();
-      }
-    } catch (IOException ex) {
-      LOG.log(Level.FINE, "Error while closing server socket", ex);
-    }
-    for (String userName : new HashSet<>(sessions.keySet())) {
-      removeSession(userName);
-    }
+    ServerSocket socket = serverSocket;
+    serverSocket = null;
+    closeServerSocket(socket);
+    closeAllSessions();
     clientExecutor.shutdownNow();
     acceptorExecutor.shutdownNow();
+    startSignal.countDown();
   }
 
   public Set<String> getConnectedUsers() {
@@ -542,6 +634,49 @@ public final class ChatServer implements AutoCloseable {
       thread.setDaemon(true);
       return thread;
     };
+  }
+
+  private static Duration remainingDuration(long deadlineNanos)
+      throws java.net.SocketTimeoutException {
+    long remaining = deadlineNanos - System.nanoTime();
+    if (remaining <= 0) {
+      throw new java.net.SocketTimeoutException("Handshake deadline exceeded");
+    }
+    return Duration.ofNanos(remaining);
+  }
+
+  private static void closeServerSocket(ServerSocket socket) {
+    if (socket == null) {
+      return;
+    }
+    try {
+      socket.close();
+    } catch (IOException ex) {
+      LOG.log(Level.FINE, "Error while closing server socket", ex);
+    }
+  }
+
+  private void closeAllSessions() {
+    Map<String, ChatConnection> closingSessions;
+    synchronized (sessionsMonitor) {
+      closingSessions = Map.copyOf(sessions);
+      sessions.clear();
+      roles.clear();
+      for (Set<String> members : roomMembers.values()) {
+        members.removeAll(closingSessions.keySet());
+      }
+    }
+    for (ChatConnection connection : closingSessions.values()) {
+      closeConnection(connection);
+    }
+  }
+
+  private static void closeConnection(ChatConnection connection) {
+    try {
+      connection.close();
+    } catch (IOException ex) {
+      LOG.log(Level.FINE, "Error closing connection", ex);
+    }
   }
 
   private record HandshakeResult(String userName, UserRole role) {}

@@ -1,5 +1,6 @@
 package dev.krotname.networkchat.client.gui;
 
+import dev.krotname.networkchat.network.AccountStore;
 import dev.krotname.networkchat.network.ChatServerConfig;
 
 /** Immutable GUI connection settings collected before a socket session starts. */
@@ -13,13 +14,17 @@ public record ConnectionSettings(
       throw new IllegalArgumentException("Server address is required");
     }
     serverAddress = serverAddress.trim();
-    if (userName == null || userName.isBlank()) {
-      throw new IllegalArgumentException("User name is required");
+    if (serverAddress.length() > 253 || serverAddress.chars().anyMatch(Character::isISOControl)) {
+      throw new IllegalArgumentException("Server address is invalid");
     }
-    userName = userName.trim();
-    accountToken = accountToken == null ? "" : accountToken.trim();
-    if (serverPort < 0 || serverPort > 65_535) {
-      throw new IllegalArgumentException("Port must be in range 0..65535");
+    userName = userName == null ? null : userName.trim();
+    if (!AccountStore.isValidUserName(userName)) {
+      throw new IllegalArgumentException(
+          "User name must contain 3..64 letters, digits, '_' or '-'");
+    }
+    accountToken = accountToken == null ? "" : accountToken;
+    if (serverPort < 1 || serverPort > 65_535) {
+      throw new IllegalArgumentException("Port must be in range 1..65535");
     }
   }
 

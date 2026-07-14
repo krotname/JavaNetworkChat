@@ -1,6 +1,7 @@
 package dev.krotname.networkchat;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -48,11 +49,9 @@ class NetworkChatIntegrationTest {
         assertTrue(server.getConnectedUsers().contains("alice"));
         assertTrue(server.getConnectedUsers().contains("bob"));
 
-        ChatMessage sentMessage = alice.sendText("Привет всем");
-        awaitTextMessage(
-            alice, MessageType.ROOM_TEXT, "alice", "Привет всем", sentMessage.messageId());
-        awaitTextMessage(
-            bob, MessageType.ROOM_TEXT, "alice", "Привет всем", sentMessage.messageId());
+        alice.sendText("Привет всем");
+        awaitTextMessage(alice, MessageType.ROOM_TEXT, "alice", "Привет всем", null);
+        awaitTextMessage(bob, MessageType.ROOM_TEXT, "alice", "Привет всем", null);
       }
     }
   }
@@ -93,10 +92,10 @@ class NetworkChatIntegrationTest {
         awaitProtocolEvent(alice, MessageType.ROOM_JOINED, "dev");
         awaitProtocolEvent(bob, MessageType.ROOM_JOINED, "dev");
 
-        ChatMessage message = alice.sendRoomText("dev", "room secret");
+        alice.sendRoomText("dev", "room secret");
 
-        awaitTextMessage(alice, MessageType.ROOM_TEXT, "alice", "room secret", message.messageId());
-        awaitTextMessage(bob, MessageType.ROOM_TEXT, "alice", "room secret", message.messageId());
+        awaitTextMessage(alice, MessageType.ROOM_TEXT, "alice", "room secret", null);
+        awaitTextMessage(bob, MessageType.ROOM_TEXT, "alice", "room secret", null);
         assertNoMessage(carol, MessageType.ROOM_TEXT, "room secret");
       }
     }
@@ -117,12 +116,10 @@ class NetworkChatIntegrationTest {
         bob.connect();
         carol.connect();
 
-        ChatMessage message = alice.sendPrivateText("bob", "private secret");
+        alice.sendPrivateText("bob", "private secret");
 
-        awaitTextMessage(
-            alice, MessageType.PRIVATE_TEXT, "alice", "private secret", message.messageId());
-        awaitTextMessage(
-            bob, MessageType.PRIVATE_TEXT, "alice", "private secret", message.messageId());
+        awaitTextMessage(alice, MessageType.PRIVATE_TEXT, "alice", "private secret", null);
+        awaitTextMessage(bob, MessageType.PRIVATE_TEXT, "alice", "private secret", null);
         assertNoMessage(carol, MessageType.PRIVATE_TEXT, "private secret");
       }
     }
@@ -303,6 +300,64 @@ class NetworkChatIntegrationTest {
         } while (response.type() != MessageType.ERROR
             && response.type() != MessageType.NAME_ACCEPTED);
         assertEquals(MessageType.ERROR, response.type());
+      }
+    }
+  }
+
+  @Test
+  void serverReplacesClientControlledMessageIdentityAndTimestamp() throws Exception {
+    try (ChatServer server = new ChatServer(0)) {
+      server.start();
+      server.awaitStarted();
+      try (Socket socket = connectWithRetry(server.getPort());
+          ChatConnection connection = new ChatConnection(socket)) {
+        socket.setSoTimeout((int) TimeUnit.SECONDS.toMillis(2));
+        consumeNameRequest(connection);
+        connection.send(ChatMessage.withData(MessageType.USER_NAME, "alice", null));
+        ChatMessage response;
+        do {
+          response = connection.receive();
+        } while (response.type() != MessageType.NAME_ACCEPTED);
+
+        connection.send(
+            new ChatMessage(
+                MessageType.ROOM_TEXT,
+                "server-owned metadata",
+                "mallory",
+                1,
+                "client-controlled-id",
+                ChatMessage.PROTOCOL_VERSION,
+                ChatMessage.GENERAL_ROOM,
+                null));
+        do {
+          response = connection.receive();
+        } while (response.type() != MessageType.ROOM_TEXT);
+
+        assertEquals("alice", response.sender());
+        assertNotEquals("client-controlled-id", response.messageId());
+        assertTrue(response.timestamp() > 1);
+      }
+    }
+  }
+
+  @Test
+  void serverClosesConnectionAfterBoundedHandshakeAttempts() throws Exception {
+    try (ChatServer server = new ChatServer(0)) {
+      server.start();
+      server.awaitStarted();
+      try (Socket socket = connectWithRetry(server.getPort());
+          ChatConnection connection = new ChatConnection(socket)) {
+        socket.setSoTimeout((int) TimeUnit.SECONDS.toMillis(2));
+        for (int attempt = 0; attempt < 5; attempt++) {
+          consumeNameRequest(connection);
+          connection.send(ChatMessage.withData(MessageType.USER_NAME, "!!", null));
+          assertEquals(MessageType.ERROR, connection.receive().type());
+        }
+
+        ChatMessage finalError = connection.receive();
+        assertEquals(MessageType.ERROR, finalError.type());
+        assertTrue(finalError.data().contains("Too many"));
+        assertThrows(IOException.class, connection::receive);
       }
     }
   }
@@ -515,7 +570,7 @@ class NetworkChatIntegrationTest {
 
   private Path writeAccounts(String userName, UserRole role, String token) throws IOException {
     Path accountFile = tempDir.resolve(userName + "-accounts.csv");
-    String salt = userName + "-salt";
+    String salt = "0123456789abcdef0123456789abcdef";
     Files.writeString(
         accountFile,
         userName + "," + role + "," + salt + "," + AccountStore.hashToken(salt, token) + "\n",

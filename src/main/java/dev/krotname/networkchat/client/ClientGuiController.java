@@ -134,8 +134,12 @@ public final class ClientGuiController extends ChatClient {
       view.showError("Введите имя комнаты");
       return;
     }
-    if (!sendMessage(ChatMessage.roomJoin(roomName.trim()))) {
-      view.showError("Не удалось войти в комнату");
+    try {
+      if (!sendMessage(ChatMessage.roomJoin(roomName.trim()))) {
+        view.showError("Не удалось войти в комнату");
+      }
+    } catch (IllegalArgumentException ex) {
+      view.showError("Некорректное имя комнаты");
     }
   }
 
@@ -144,8 +148,12 @@ public final class ClientGuiController extends ChatClient {
       view.showError("Нельзя выйти из комнаты general");
       return;
     }
-    if (!sendMessage(ChatMessage.roomLeave(currentRoom))) {
-      view.showError("Не удалось выйти из комнаты");
+    try {
+      if (!sendMessage(ChatMessage.roomLeave(currentRoom))) {
+        view.showError("Не удалось выйти из комнаты");
+      }
+    } catch (IllegalArgumentException ex) {
+      view.showError("Некорректное имя комнаты");
     }
   }
 
@@ -166,15 +174,20 @@ public final class ClientGuiController extends ChatClient {
       view.showError("Сообщение слишком длинное. Максимум: " + ChatMessage.MAX_DATA_LENGTH);
       return false;
     }
-    if (privateRecipient != null && !privateRecipient.isBlank()) {
-      return sendPreparedMessage(
-          ChatMessage.privateText(text, getResolvedUserName(), privateRecipient));
-    }
-    if (!model.isJoinedRoom(currentRoom)) {
-      view.showError("Сначала войдите в комнату " + currentRoom);
+    try {
+      if (privateRecipient != null && !privateRecipient.isBlank()) {
+        return sendPreparedMessage(
+            ChatMessage.privateText(text, getResolvedUserName(), privateRecipient));
+      }
+      if (!model.isJoinedRoom(currentRoom)) {
+        view.showError("Сначала войдите в комнату " + currentRoom);
+        return false;
+      }
+      return sendPreparedMessage(ChatMessage.roomText(text, getResolvedUserName(), currentRoom));
+    } catch (IllegalArgumentException ex) {
+      view.showError("Некорректные параметры сообщения");
       return false;
     }
-    return sendPreparedMessage(ChatMessage.roomText(text, getResolvedUserName(), currentRoom));
   }
 
   private boolean sendPreparedMessage(ChatMessage message) {
@@ -225,7 +238,9 @@ public final class ClientGuiController extends ChatClient {
 
     @Override
     protected void informAboutAddingNewUser(String userName) {
-      model.addUser(userName);
+      if (!model.addUser(userName)) {
+        return;
+      }
       if (getResolvedUserName() != null && getResolvedUserName().equals(userName)) {
         model.addServiceMessage("Вы подключились к чату");
       } else {
@@ -237,7 +252,9 @@ public final class ClientGuiController extends ChatClient {
 
     @Override
     protected void informAboutDeletingNewUser(String userName) {
-      model.deleteUser(userName);
+      if (!model.deleteUser(userName)) {
+        return;
+      }
       model.addServiceMessage("Пользователь " + userName + " вышел из чата");
       view.refreshUsers();
       view.refreshMessages();
