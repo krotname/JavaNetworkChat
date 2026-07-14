@@ -7,7 +7,7 @@ junit = "6.1.1"
 junit-platform = "6.1.1"
 spotbugs = "6.5.8"
 spotbugs-annotations = "4.10.2"
-spotless = "8.7.0"
+spotless = "8.8.0"
 
 [libraries]
 awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
