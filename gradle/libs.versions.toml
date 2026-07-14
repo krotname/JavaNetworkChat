@@ -1,7 +1,7 @@
 [versions]
 awaitility = "4.3.0"
 checkstyle = "10.12.5"
-jackson = "2.22.0"
+jackson = "2.22.1"
 jacoco = "0.8.12"
 junit = "6.1.1"
 junit-platform = "6.1.1"
