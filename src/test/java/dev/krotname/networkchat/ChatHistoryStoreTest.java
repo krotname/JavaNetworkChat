@@ -90,7 +90,12 @@ class ChatHistoryStoreTest {
     assertEquals(
         1, ChatHistoryStore.open(historyFile, 10).recentRoomMessages("general", 10).size());
     try (var children = Files.list(tempDir)) {
-      assertFalse(children.anyMatch(path -> path.getFileName().toString().endsWith(".tmp")));
+      assertFalse(
+          children.anyMatch(
+              path -> {
+                Path fileName = path.getFileName();
+                return fileName != null && fileName.toString().endsWith(".tmp");
+              }));
     }
   }
 
