@@ -8,7 +8,10 @@ import java.net.Socket;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -33,7 +36,6 @@ public final class ChatServer implements AutoCloseable {
   private static final int MIN_ROOM_NAME_LENGTH = 1;
   private static final int MAX_ROOM_NAME_LENGTH = 64;
   private static final int MAX_HANDSHAKE_ATTEMPTS = 5;
-  static final int MAX_ROOMS = 1_000;
   static final String ENV_TLS_KEYSTORE_PASSWORD = "NETWORK_CHAT_TLS_KEYSTORE_PASSWORD";
   static final String ENV_TLS_KEY_PASSWORD = "NETWORK_CHAT_TLS_KEY_PASSWORD";
 
@@ -44,6 +46,7 @@ public final class ChatServer implements AutoCloseable {
   private final Map<String, UserRole> roles = new ConcurrentHashMap<>();
   private final Map<String, Set<String>> roomMembers = new ConcurrentHashMap<>();
   private final Object sessionsMonitor = new Object();
+  private final Object roomsMonitor = new Object();
   private final AtomicInteger activeClients = new AtomicInteger();
   private final ExecutorService clientExecutor;
   private final ExecutorService acceptorExecutor =
@@ -67,7 +70,7 @@ public final class ChatServer implements AutoCloseable {
         config.accountFile() == null ? AccountStore.disabled() : loadAccountStore(config);
     roomMembers.put(ChatMessage.GENERAL_ROOM, ConcurrentHashMap.newKeySet());
     for (String roomName : historyStore.knownRooms()) {
-      if (roomMembers.size() >= MAX_ROOMS) {
+      if (roomMembers.size() >= config.maxRooms()) {
         break;
       }
       roomMembers.putIfAbsent(roomName, ConcurrentHashMap.newKeySet());
@@ -110,6 +113,8 @@ public final class ChatServer implements AutoCloseable {
         case "--port" ->
             parsedConfig = parsedConfig.withPort(Integer.parseInt(nextArg(args, ++i, arg)));
         case "--bind" -> parsedConfig = parsedConfig.withBindAddress(nextArg(args, ++i, arg));
+        case "--max-rooms" ->
+            parsedConfig = parsedConfig.withMaxRooms(Integer.parseInt(nextArg(args, ++i, arg)));
         case "--history" ->
             parsedConfig = parsedConfig.withHistory(Path.of(nextArg(args, ++i, arg)));
         case "--accounts" ->
@@ -230,16 +235,17 @@ public final class ChatServer implements AutoCloseable {
       try (socket;
           ChatConnection connection = new ChatConnection(socket)) {
         sessionConnection = connection;
+        ClientLimits limits = new ClientLimits(config.rateLimit());
         HandshakeResult handshake = serverHandshake(connection);
         userName = handshake.userName();
-        joinRoom(userName, ChatMessage.GENERAL_ROOM, connection);
+        joinRoom(userName, ChatMessage.GENERAL_ROOM, connection, limits);
         socket.setSoTimeout(config.readTimeoutMillis());
         sendUsersListToNewClient(connection);
         sendRoomsListToNewClient(connection);
         activeClients.incrementAndGet();
         active = true;
         broadcast(ChatMessage.withData(MessageType.USER_ADDED, userName, null), connection);
-        serverMainLoop(connection, userName);
+        serverMainLoop(connection, userName, limits);
       }
     } catch (IOException | RuntimeException ex) {
       LOG.log(Level.FINE, "Client session ended", ex);
@@ -319,17 +325,27 @@ public final class ChatServer implements AutoCloseable {
   }
 
   private void sendRoomsListToNewClient(ChatConnection connection) throws IOException {
-    for (String roomName : roomMembers.keySet()) {
+    List<String> roomNames;
+    synchronized (roomsMonitor) {
+      roomNames = List.copyOf(roomMembers.keySet());
+    }
+    for (String roomName : roomNames) {
       connection.send(ChatMessage.roomAdded(roomName));
     }
   }
 
   /** Read messages from one client and broadcast normalized text messages to all clients. */
-  private void serverMainLoop(ChatConnection connection, String userName) throws IOException {
+  private void serverMainLoop(ChatConnection connection, String userName, ClientLimits limits)
+      throws IOException {
     while (running.get()) {
       ChatMessage message = connection.receive(config.readTimeout());
       if (!isProtocolSupported(message)) {
         connection.send(unsupportedProtocolVersionError());
+        continue;
+      }
+      if (!limits.frames().tryAcquire()) {
+        connection.send(
+            ChatMessage.withData(MessageType.ERROR, "Too many requests, slow down", null));
         continue;
       }
       if (isHealthCommand(message)) {
@@ -339,9 +355,16 @@ public final class ChatServer implements AutoCloseable {
       switch (message.type()) {
         case TEXT, ROOM_TEXT -> handleRoomText(message, userName, connection);
         case PRIVATE_TEXT -> handlePrivateText(message, userName, connection);
-        case ROOM_JOIN -> handleRoomJoin(message, userName, connection);
+        case ROOM_JOIN -> handleRoomJoin(message, userName, connection, limits);
         case ROOM_LEAVE -> handleRoomLeave(message, userName, connection);
-        case NAME_ACCEPTED, USER_ADDED, USER_REMOVED, ROOM_ADDED, ROOM_JOINED, ROOM_LEFT, ERROR ->
+        case NAME_ACCEPTED,
+            USER_ADDED,
+            USER_REMOVED,
+            ROOM_ADDED,
+            ROOM_REMOVED,
+            ROOM_JOINED,
+            ROOM_LEFT,
+            ERROR ->
             connection.send(
                 ChatMessage.withData(MessageType.ERROR, "Unsupported client frame", null));
         default -> throw new IOException("Unsupported message type: " + message.type());
@@ -436,28 +459,15 @@ public final class ChatServer implements AutoCloseable {
         config.tls().enabled());
   }
 
-  private void handleRoomJoin(ChatMessage message, String userName, ChatConnection connection)
+  private void handleRoomJoin(
+      ChatMessage message, String userName, ChatConnection connection, ClientLimits limits)
       throws IOException {
     String roomName = roomOrGeneral(message.room());
     if (!isRoomNameValid(roomName)) {
       connection.send(ChatMessage.withData(MessageType.ERROR, "Invalid room name", null));
       return;
     }
-    boolean created = false;
-    synchronized (roomMembers) {
-      if (!roomMembers.containsKey(roomName)) {
-        if (roomMembers.size() >= MAX_ROOMS) {
-          connection.send(ChatMessage.withData(MessageType.ERROR, "Room limit reached", null));
-          return;
-        }
-        roomMembers.put(roomName, ConcurrentHashMap.newKeySet());
-        created = true;
-      }
-    }
-    if (created) {
-      broadcast(ChatMessage.roomAdded(roomName), null);
-    }
-    joinRoom(userName, roomName, connection);
+    joinRoom(userName, roomName, connection, limits);
   }
 
   private void handleRoomLeave(ChatMessage message, String userName, ChatConnection connection)
@@ -467,21 +477,40 @@ public final class ChatServer implements AutoCloseable {
       connection.send(ChatMessage.withData(MessageType.ERROR, "Cannot leave general room", null));
       return;
     }
-    Set<String> members = roomMembers.get(roomName);
-    if (members != null) {
-      members.remove(userName);
-    }
+    boolean reclaimed = releaseRoom(userName, roomName);
     connection.send(ChatMessage.roomLeft(roomName));
+    if (reclaimed) {
+      announceRoomRemoved(roomName);
+    }
   }
 
-  private void joinRoom(String userName, String roomName, ChatConnection connection)
+  /**
+   * Admits one user to an existing or newly created room. Creation is bounded by the configured
+   * room cap and by a per-connection token bucket; rejected requests are answered with an {@code
+   * ERROR} frame instead of closing the session.
+   */
+  private void joinRoom(
+      String userName, String roomName, ChatConnection connection, ClientLimits limits)
       throws IOException {
     if (sessions.get(userName) != connection) {
       throw new IOException("Session is no longer active");
     }
-    Set<String> members =
-        roomMembers.computeIfAbsent(roomName, ignored -> ConcurrentHashMap.newKeySet());
-    members.add(userName);
+    RoomAdmission admission = admitToRoom(userName, roomName, limits);
+    switch (admission) {
+      case THROTTLED -> {
+        connection.send(
+            ChatMessage.withData(MessageType.ERROR, "Too many new rooms, slow down", null));
+        return;
+      }
+      case LIMIT_REACHED -> {
+        connection.send(ChatMessage.withData(MessageType.ERROR, "Room limit reached", null));
+        return;
+      }
+      case CREATED -> broadcast(ChatMessage.roomAdded(roomName), null);
+      case JOINED -> {
+        // The room already existed, so no ROOM_ADDED announcement is needed.
+      }
+    }
     try {
       connection.send(ChatMessage.roomJoined(roomName));
       for (ChatMessage message :
@@ -489,8 +518,80 @@ public final class ChatServer implements AutoCloseable {
         connection.send(message);
       }
     } catch (IOException ex) {
-      members.remove(userName);
+      if (releaseRoom(userName, roomName)) {
+        announceRoomRemoved(roomName);
+      }
       throw ex;
+    }
+  }
+
+  /**
+   * Reserves room membership under a dedicated monitor so the cap is exact and a room cannot be
+   * reclaimed between a joiner observing it and joining it. No I/O runs while the monitor is held,
+   * and the monitor is never taken while the sessions monitor is held.
+   */
+  private RoomAdmission admitToRoom(String userName, String roomName, ClientLimits limits) {
+    synchronized (roomsMonitor) {
+      Set<String> members = roomMembers.get(roomName);
+      if (members != null) {
+        members.add(userName);
+        return RoomAdmission.JOINED;
+      }
+      if (!limits.roomCreations().tryAcquire()) {
+        return RoomAdmission.THROTTLED;
+      }
+      if (roomMembers.size() >= config.maxRooms()) {
+        return RoomAdmission.LIMIT_REACHED;
+      }
+      Set<String> createdMembers = ConcurrentHashMap.newKeySet();
+      createdMembers.add(userName);
+      roomMembers.put(roomName, createdMembers);
+      return RoomAdmission.CREATED;
+    }
+  }
+
+  /**
+   * Drops one membership and reclaims the room once it is empty, so room names cannot accumulate
+   * for the lifetime of the process. The general room is never reclaimed.
+   */
+  private boolean releaseRoom(String userName, String roomName) {
+    synchronized (roomsMonitor) {
+      Set<String> members = roomMembers.get(roomName);
+      if (members == null || !members.remove(userName) || !members.isEmpty()) {
+        return false;
+      }
+      if (ChatMessage.GENERAL_ROOM.equals(roomName)) {
+        return false;
+      }
+      roomMembers.remove(roomName);
+      return true;
+    }
+  }
+
+  /** Drops every membership of one user and returns the rooms reclaimed by that disconnect. */
+  private List<String> releaseAllRooms(String userName) {
+    List<String> reclaimedRooms = new ArrayList<>();
+    synchronized (roomsMonitor) {
+      Iterator<Map.Entry<String, Set<String>>> rooms = roomMembers.entrySet().iterator();
+      while (rooms.hasNext()) {
+        Map.Entry<String, Set<String>> room = rooms.next();
+        if (!room.getValue().remove(userName)
+            || !room.getValue().isEmpty()
+            || ChatMessage.GENERAL_ROOM.equals(room.getKey())) {
+          continue;
+        }
+        rooms.remove();
+        reclaimedRooms.add(room.getKey());
+      }
+    }
+    return reclaimedRooms;
+  }
+
+  private void announceRoomRemoved(String roomName) {
+    try {
+      broadcast(ChatMessage.roomRemoved(roomName), null);
+    } catch (IOException ex) {
+      LOG.log(Level.FINE, "Unable to broadcast ROOM_REMOVED", ex);
     }
   }
 
@@ -557,23 +658,28 @@ public final class ChatServer implements AutoCloseable {
     }
   }
 
+  /**
+   * Drops one session and reclaims the rooms it emptied. Announcements run outside the sessions
+   * monitor so the rooms monitor is never nested inside it.
+   */
   boolean removeSession(String userName, ChatConnection expectedConnection) {
     synchronized (sessionsMonitor) {
       if (expectedConnection == null || !sessions.remove(userName, expectedConnection)) {
         return false;
       }
       roles.remove(userName);
-      for (Set<String> members : roomMembers.values()) {
-        members.remove(userName);
-      }
       closeConnection(expectedConnection);
-      try {
-        broadcast(ChatMessage.withData(MessageType.USER_REMOVED, userName, null), null);
-      } catch (IOException ex) {
-        LOG.log(Level.FINE, "Unable to broadcast USER_REMOVED", ex);
-      }
-      return true;
     }
+    List<String> reclaimedRooms = releaseAllRooms(userName);
+    try {
+      broadcast(ChatMessage.withData(MessageType.USER_REMOVED, userName, null), null);
+    } catch (IOException ex) {
+      LOG.log(Level.FINE, "Unable to broadcast USER_REMOVED", ex);
+    }
+    for (String reclaimedRoom : reclaimedRooms) {
+      announceRoomRemoved(reclaimedRoom);
+    }
+    return true;
   }
 
   @Override
@@ -662,6 +768,8 @@ public final class ChatServer implements AutoCloseable {
       closingSessions = Map.copyOf(sessions);
       sessions.clear();
       roles.clear();
+    }
+    synchronized (roomsMonitor) {
       for (Set<String> members : roomMembers.values()) {
         members.removeAll(closingSessions.keySet());
       }
@@ -680,4 +788,19 @@ public final class ChatServer implements AutoCloseable {
   }
 
   private record HandshakeResult(String userName, UserRole role) {}
+
+  /** Per-connection throttles created once for every accepted client. */
+  private record ClientLimits(TokenBucket frames, TokenBucket roomCreations) {
+    ClientLimits(RateLimitConfig rateLimit) {
+      this(rateLimit.newFrameBucket(), rateLimit.newRoomCreationBucket());
+    }
+  }
+
+  /** Result of one room admission attempt. */
+  private enum RoomAdmission {
+    JOINED,
+    CREATED,
+    LIMIT_REACHED,
+    THROTTLED
+  }
 }

@@ -162,6 +162,12 @@ public final class ClientGuiModel {
     allRoomNames.add(roomName);
   }
 
+  /** Drops a room reclaimed by the server so the room list does not go stale. */
+  public synchronized boolean removeRoom(String roomName) {
+    joinedRoomNames.remove(roomName);
+    return allRoomNames.remove(roomName);
+  }
+
   public synchronized void joinRoom(String roomName) {
     allRoomNames.add(roomName);
     joinedRoomNames.add(roomName);

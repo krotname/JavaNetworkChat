@@ -1,6 +1,7 @@
 package dev.krotname.networkchat;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -141,6 +142,53 @@ class NetworkChatIntegrationTest {
 
         alice.leaveRoom("dev");
         awaitProtocolEvent(alice, MessageType.ROOM_LEFT, "dev");
+        awaitProtocolEvent(alice, MessageType.ROOM_REMOVED, "dev");
+
+        assertFalse(server.getRooms().contains("dev"));
+        assertTrue(server.getRooms().contains(ChatMessage.GENERAL_ROOM));
+      }
+    }
+  }
+
+  @Test
+  void roomsAreReclaimedWhenTheirLastMemberDisconnects() throws Exception {
+    int port = 0;
+    try (ChatServer server = new ChatServer(port)) {
+      server.start();
+      server.awaitStarted();
+      port = server.getPort();
+
+      try (TestClient observer = new TestClient("observer", port)) {
+        observer.connect();
+        try (TestClient alice = new TestClient("alice", port)) {
+          alice.connect();
+          alice.joinRoom("dev");
+          awaitProtocolEvent(observer, MessageType.ROOM_ADDED, "dev");
+        }
+
+        awaitProtocolEvent(observer, MessageType.ROOM_REMOVED, "dev");
+        assertFalse(server.getRooms().contains("dev"));
+      }
+    }
+  }
+
+  @Test
+  void roomCreationBeyondTheConfiguredCapIsRejected() throws Exception {
+    int port = 0;
+    try (ChatServer server = new ChatServer(ChatServerConfig.ofPort(port).withMaxRooms(2))) {
+      server.start();
+      server.awaitStarted();
+      port = server.getPort();
+
+      try (TestClient alice = new TestClient("alice", port)) {
+        alice.connect();
+        alice.joinRoom("dev");
+        awaitProtocolEvent(alice, MessageType.ROOM_JOINED, "dev");
+
+        alice.joinRoom("overflow");
+        awaitProtocolEvent(alice, MessageType.ERROR, "Room limit reached");
+
+        assertFalse(server.getRooms().contains("overflow"));
       }
     }
   }

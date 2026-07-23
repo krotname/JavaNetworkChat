@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Reclaimed empty rooms on last leave and on disconnect, announced them with the new `ROOM_REMOVED`
+  frame, and taught the console and Swing clients to drop reclaimed rooms.
+- Bounded distinct rooms with a configurable `maxRooms` limit (default 256, CLI `--max-rooms`) and
+  answered over-limit `ROOM_JOIN` with an explicit `ERROR`.
+- Added per-connection token buckets for inbound frames and room creation that reply `ERROR` instead
+  of dropping the connection.
+
 ## 1.6.1 - 2026-06-19
 
 - Hardened account storage, history migration, TLS socket handling, and integration coverage after repository audit.

@@ -9,17 +9,21 @@ public record ChatServerConfig(
     int port,
     String bindAddress,
     int maxClients,
+    int maxRooms,
     Duration handshakeTimeout,
     Duration readTimeout,
     Path historyFile,
     int historyLimit,
     int historyReplayLimit,
     Path accountFile,
-    TlsServerConfig tls) {
+    TlsServerConfig tls,
+    RateLimitConfig rateLimit) {
   public static final int DEFAULT_PORT = 1500;
   public static final String DEFAULT_BIND_ADDRESS = "127.0.0.1";
   public static final int DEFAULT_MAX_CLIENTS = 100;
   public static final int MAX_CLIENTS = 10_000;
+  public static final int DEFAULT_MAX_ROOMS = 256;
+  public static final int MAX_ROOMS = 100_000;
   public static final Duration DEFAULT_HANDSHAKE_TIMEOUT = Duration.ofSeconds(10);
   public static final Duration DEFAULT_READ_TIMEOUT = Duration.ofMinutes(5);
   public static final int DEFAULT_HISTORY_LIMIT = 10_000;
@@ -33,13 +37,15 @@ public record ChatServerConfig(
         port,
         DEFAULT_BIND_ADDRESS,
         maxClients,
+        DEFAULT_MAX_ROOMS,
         handshakeTimeout,
         readTimeout,
         null,
         DEFAULT_HISTORY_LIMIT,
         DEFAULT_HISTORY_REPLAY_LIMIT,
         null,
-        TlsServerConfig.disabled());
+        TlsServerConfig.disabled(),
+        RateLimitConfig.defaultLimits());
   }
 
   public ChatServerConfig {
@@ -55,6 +61,9 @@ public record ChatServerConfig(
     }
     if (maxClients < 1 || maxClients > MAX_CLIENTS) {
       throw new IllegalArgumentException("Max clients must be in range 1.." + MAX_CLIENTS);
+    }
+    if (maxRooms < 1 || maxRooms > MAX_ROOMS) {
+      throw new IllegalArgumentException("Max rooms must be in range 1.." + MAX_ROOMS);
     }
     Objects.requireNonNull(handshakeTimeout, "handshakeTimeout");
     Objects.requireNonNull(readTimeout, "readTimeout");
@@ -74,6 +83,7 @@ public record ChatServerConfig(
           "History replay limit must be between 0 and the configured limits");
     }
     Objects.requireNonNull(tls, "tls");
+    Objects.requireNonNull(rateLimit, "rateLimit");
     validateSocketTimeout(handshakeTimeout, "handshakeTimeout");
     validateSocketTimeout(readTimeout, "readTimeout");
   }
@@ -92,13 +102,15 @@ public record ChatServerConfig(
         newPort,
         bindAddress,
         maxClients,
+        maxRooms,
         handshakeTimeout,
         readTimeout,
         historyFile,
         historyLimit,
         historyReplayLimit,
         accountFile,
-        tls);
+        tls,
+        rateLimit);
   }
 
   public ChatServerConfig withBindAddress(String newBindAddress) {
@@ -106,13 +118,31 @@ public record ChatServerConfig(
         port,
         newBindAddress,
         maxClients,
+        maxRooms,
         handshakeTimeout,
         readTimeout,
         historyFile,
         historyLimit,
         historyReplayLimit,
         accountFile,
-        tls);
+        tls,
+        rateLimit);
+  }
+
+  public ChatServerConfig withMaxRooms(int newMaxRooms) {
+    return new ChatServerConfig(
+        port,
+        bindAddress,
+        maxClients,
+        newMaxRooms,
+        handshakeTimeout,
+        readTimeout,
+        historyFile,
+        historyLimit,
+        historyReplayLimit,
+        accountFile,
+        tls,
+        rateLimit);
   }
 
   public ChatServerConfig withHistory(Path newHistoryFile) {
@@ -120,13 +150,15 @@ public record ChatServerConfig(
         port,
         bindAddress,
         maxClients,
+        maxRooms,
         handshakeTimeout,
         readTimeout,
         newHistoryFile,
         historyLimit,
         historyReplayLimit,
         accountFile,
-        tls);
+        tls,
+        rateLimit);
   }
 
   public ChatServerConfig withHistory(Path newHistoryFile, int newLimit, int newReplayLimit) {
@@ -134,13 +166,15 @@ public record ChatServerConfig(
         port,
         bindAddress,
         maxClients,
+        maxRooms,
         handshakeTimeout,
         readTimeout,
         newHistoryFile,
         newLimit,
         newReplayLimit,
         accountFile,
-        tls);
+        tls,
+        rateLimit);
   }
 
   public ChatServerConfig withAccounts(Path newAccountFile) {
@@ -148,13 +182,15 @@ public record ChatServerConfig(
         port,
         bindAddress,
         maxClients,
+        maxRooms,
         handshakeTimeout,
         readTimeout,
         historyFile,
         historyLimit,
         historyReplayLimit,
         newAccountFile,
-        tls);
+        tls,
+        rateLimit);
   }
 
   public ChatServerConfig withTls(TlsServerConfig newTls) {
@@ -162,13 +198,31 @@ public record ChatServerConfig(
         port,
         bindAddress,
         maxClients,
+        maxRooms,
         handshakeTimeout,
         readTimeout,
         historyFile,
         historyLimit,
         historyReplayLimit,
         accountFile,
-        newTls);
+        newTls,
+        rateLimit);
+  }
+
+  public ChatServerConfig withRateLimit(RateLimitConfig newRateLimit) {
+    return new ChatServerConfig(
+        port,
+        bindAddress,
+        maxClients,
+        maxRooms,
+        handshakeTimeout,
+        readTimeout,
+        historyFile,
+        historyLimit,
+        historyReplayLimit,
+        accountFile,
+        tls,
+        newRateLimit);
   }
 
   int handshakeTimeoutMillis() {

@@ -2,6 +2,7 @@ package dev.krotname.networkchat.network;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.net.InetAddress;
@@ -105,6 +106,40 @@ class ChatServerConfigTest {
   }
 
   @Test
+  void exposesRoomCapAndPerConnectionRateLimits() {
+    ChatServerConfig defaults = ChatServerConfig.defaultConfig();
+
+    assertEquals(ChatServerConfig.DEFAULT_MAX_ROOMS, defaults.maxRooms());
+    assertEquals(RateLimitConfig.defaultLimits(), defaults.rateLimit());
+
+    ChatServerConfig tightened =
+        defaults.withMaxRooms(8).withRateLimit(new RateLimitConfig(5, 1, 2, 0.5));
+
+    assertEquals(8, tightened.maxRooms());
+    assertEquals(2, tightened.rateLimit().roomCreationBurst());
+  }
+
+  @Test
+  void rejectsInvalidRoomCapAndRateLimits() {
+    ChatServerConfig defaults = ChatServerConfig.defaultConfig();
+
+    assertThrows(IllegalArgumentException.class, () -> assertNotNull(defaults.withMaxRooms(0)));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> assertNotNull(defaults.withMaxRooms(ChatServerConfig.MAX_ROOMS + 1)));
+    assertThrows(NullPointerException.class, () -> assertNotNull(defaults.withRateLimit(null)));
+    assertThrows(IllegalArgumentException.class, () -> new RateLimitConfig(0, 1, 1, 1));
+    assertThrows(IllegalArgumentException.class, () -> new RateLimitConfig(1, 1, 0, 1));
+    assertThrows(IllegalArgumentException.class, () -> new RateLimitConfig(1, 0, 1, 1));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new RateLimitConfig(1, 1, 1, Double.POSITIVE_INFINITY));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new RateLimitConfig(RateLimitConfig.MAX_BURST + 1, 1, 1, 1));
+  }
+
+  @Test
   void rejectsIncompleteTlsConfig() {
     assertThrows(IllegalArgumentException.class, () -> TlsServerConfig.enabled(null, "changeit"));
     assertThrows(
@@ -115,7 +150,12 @@ class ChatServerConfigTest {
   void parsesServerOptionsAndReadsTlsSecretsOnlyFromEnvironment() {
     ChatServerConfig config =
         ChatServer.parseConfig(
-            new String[] {"--port", "1600", "--bind", "0.0.0.0", "--tls-keystore", "chat.p12"},
+            new String[] {
+              "--port", "1600",
+              "--bind", "0.0.0.0",
+              "--max-rooms", "16",
+              "--tls-keystore", "chat.p12"
+            },
             Map.of(
                 ChatServer.ENV_TLS_KEYSTORE_PASSWORD,
                 "store-secret",
@@ -124,6 +164,7 @@ class ChatServerConfigTest {
 
     assertEquals(1600, config.port());
     assertEquals("0.0.0.0", config.bindAddress());
+    assertEquals(16, config.maxRooms());
     assertEquals("store-secret", config.tls().keyStorePassword());
     assertEquals("key-secret", config.tls().keyPassword());
     assertThrows(
