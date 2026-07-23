@@ -13,6 +13,7 @@ public enum MessageType {
   ROOM_JOIN,
   ROOM_LEAVE,
   ROOM_ADDED,
+  ROOM_REMOVED,
   ROOM_JOINED,
   ROOM_LEFT,
   ERROR

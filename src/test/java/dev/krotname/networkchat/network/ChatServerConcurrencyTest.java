@@ -15,9 +15,8 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.time.Duration;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 
 class ChatServerConcurrencyTest {
@@ -75,20 +74,115 @@ class ChatServerConcurrencyTest {
 
   @Test
   void roomCreationStopsAtTheConfiguredServerLimit() throws Exception {
-    try (ChatServer server = new ChatServer(0)) {
+    try (ChatServer server = new ChatServer(ChatServerConfig.ofPort(0).withMaxRooms(2))) {
       server.start();
       try (ClientSession alice = connect(server, "alice")) {
-        Map<String, Set<String>> rooms = rooms(server);
-        for (int index = rooms.size(); index < ChatServer.MAX_ROOMS; index++) {
-          rooms.put("existing_" + index, ConcurrentHashMap.newKeySet());
-        }
+        alice.connection().send(ChatMessage.roomJoin("first"));
+        receiveUntilRoom(alice, "first");
 
         alice.connection().send(ChatMessage.roomJoin("overflow"));
         ChatMessage response = receiveUntil(alice, MessageType.ERROR);
 
-        assertTrue(response.data().contains("limit"));
+        assertEquals("Room limit reached", response.data());
         assertFalse(server.getRooms().contains("overflow"));
+        assertEquals(2, server.getRooms().size());
       }
+    }
+  }
+
+  @Test
+  void roomCreationIsThrottledPerConnection() throws Exception {
+    ChatServerConfig config =
+        ChatServerConfig.ofPort(0).withRateLimit(new RateLimitConfig(60, 20, 1, 0.001));
+    try (ChatServer server = new ChatServer(config)) {
+      server.start();
+      try (ClientSession alice = connect(server, "alice")) {
+        alice.connection().send(ChatMessage.roomJoin("first"));
+        receiveUntilRoom(alice, "first");
+
+        alice.connection().send(ChatMessage.roomJoin("second"));
+        ChatMessage response = receiveUntil(alice, MessageType.ERROR);
+
+        assertEquals("Too many new rooms, slow down", response.data());
+        assertFalse(server.getRooms().contains("second"));
+        assertTrue(server.getConnectedUsers().contains("alice"));
+      }
+    }
+  }
+
+  @Test
+  void inboundFramesAreThrottledPerConnection() throws Exception {
+    ChatServerConfig config =
+        ChatServerConfig.ofPort(0).withRateLimit(new RateLimitConfig(1, 0.001, 10, 0.5));
+    try (ChatServer server = new ChatServer(config)) {
+      server.start();
+      try (ClientSession alice = connect(server, "alice")) {
+        alice.connection().send(ChatMessage.roomJoin("first"));
+        receiveUntilRoom(alice, "first");
+
+        alice.connection().send(ChatMessage.text("throttled", "alice"));
+        ChatMessage response = receiveUntil(alice, MessageType.ERROR);
+
+        assertEquals("Too many requests, slow down", response.data());
+        assertTrue(server.getConnectedUsers().contains("alice"));
+      }
+    }
+  }
+
+  @Test
+  void emptyRoomIsReclaimedWhenTheLastMemberLeaves() throws Exception {
+    try (ChatServer server = new ChatServer(0)) {
+      server.start();
+      try (ClientSession alice = connect(server, "alice");
+          ClientSession observer = connect(server, "observer")) {
+        alice.connection().send(ChatMessage.roomJoin("dev"));
+        receiveUntilRoom(alice, "dev");
+        assertTrue(server.getRooms().contains("dev"));
+
+        alice.connection().send(ChatMessage.roomLeave("dev"));
+        ChatMessage removed = receiveUntilRoomEvent(observer, MessageType.ROOM_REMOVED, "dev");
+
+        assertEquals("dev", removed.room());
+        assertFalse(server.getRooms().contains("dev"));
+        assertTrue(server.getRooms().contains(ChatMessage.GENERAL_ROOM));
+      }
+    }
+  }
+
+  @Test
+  void emptyRoomIsReclaimedWhenTheLastMemberDisconnects() throws Exception {
+    try (ChatServer server = new ChatServer(0)) {
+      server.start();
+      try (ClientSession observer = connect(server, "observer")) {
+        try (ClientSession alice = connect(server, "alice")) {
+          alice.connection().send(ChatMessage.roomJoin("dev"));
+          receiveUntilRoom(alice, "dev");
+          assertTrue(server.getRooms().contains("dev"));
+        }
+
+        ChatMessage removed = receiveUntilRoomEvent(observer, MessageType.ROOM_REMOVED, "dev");
+
+        assertEquals("dev", removed.room());
+        assertFalse(server.getRooms().contains("dev"));
+      }
+    }
+  }
+
+  @Test
+  void generalRoomIsNeverReclaimed() throws Exception {
+    try (ChatServer server = new ChatServer(0)) {
+      server.start();
+      try (ClientSession alice = connect(server, "alice")) {
+        alice.connection().send(ChatMessage.roomLeave(ChatMessage.GENERAL_ROOM));
+        ChatMessage response = receiveUntil(alice, MessageType.ERROR);
+
+        assertEquals("Cannot leave general room", response.data());
+      }
+
+      Awaitility.await("wait for the disconnect to be processed")
+          .atMost(Duration.ofSeconds(5))
+          .untilAsserted(() -> assertTrue(server.getConnectedUsers().isEmpty()));
+      assertTrue(server.getRooms().contains(ChatMessage.GENERAL_ROOM));
     }
   }
 
@@ -162,10 +256,15 @@ class ChatServerConcurrencyTest {
 
   private static ChatMessage receiveUntilRoom(ClientSession session, String expectedRoom)
       throws Exception {
+    return receiveUntilRoomEvent(session, MessageType.ROOM_JOINED, expectedRoom);
+  }
+
+  private static ChatMessage receiveUntilRoomEvent(
+      ClientSession session, MessageType expectedType, String expectedRoom) throws Exception {
     ChatMessage response;
     do {
       response = session.connection().receive(Duration.ofSeconds(2));
-    } while (response.type() != MessageType.ROOM_JOINED || !expectedRoom.equals(response.room()));
+    } while (response.type() != expectedType || !expectedRoom.equals(response.room()));
     return response;
   }
 
@@ -174,13 +273,6 @@ class ChatServerConcurrencyTest {
     Field field = ChatServer.class.getDeclaredField("sessions");
     field.setAccessible(true);
     return (Map<String, ChatConnection>) field.get(server);
-  }
-
-  @SuppressWarnings("unchecked")
-  private static Map<String, Set<String>> rooms(ChatServer server) throws Exception {
-    Field field = ChatServer.class.getDeclaredField("roomMembers");
-    field.setAccessible(true);
-    return (Map<String, Set<String>>) field.get(server);
   }
 
   private record ClientSession(Socket socket, ChatConnection connection) implements Closeable {

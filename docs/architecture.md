@@ -22,6 +22,8 @@ clients <-> ChatConnection <-> ChatProtocol <-> ChatServer
    room history is replayed after `ROOM_JOINED`.
 9. Admin users can send `/health` to receive a private server status frame.
 10. Closing or failed connections are removed and announced with `USER_REMOVED`.
+11. A non-default room is reclaimed as soon as its last member leaves or disconnects, and the
+    reclamation is announced with `ROOM_REMOVED`.
 
 ## Message Frames
 
@@ -34,7 +36,7 @@ Frames are one-line UTF-8 JSON objects serialized by `ChatProtocol`.
   `PRIVATE_TEXT`.
 - `sender` carries the author for text frames; clients own display formatting.
 - `room` carries room routing for `ROOM_TEXT`, `ROOM_JOIN`, `ROOM_LEAVE`, `ROOM_ADDED`,
-  `ROOM_JOINED`, and `ROOM_LEFT`.
+  `ROOM_REMOVED`, `ROOM_JOINED`, and `ROOM_LEFT`.
 - `recipient` carries the target user for `PRIVATE_TEXT`.
 - Clients may supply `timestamp` and `messageId`, but the server replaces both when it normalizes a
   room or private message so clients cannot forge identity or ordering metadata.
@@ -50,11 +52,15 @@ Frames are one-line UTF-8 JSON objects serialized by `ChatProtocol`.
 - `port` - TCP port, default `1500`.
 - `bindAddress` - listen address, default loopback-only `127.0.0.1`.
 - `maxClients` - maximum concurrent client handler threads, default `100`.
+- `maxRooms` - maximum number of distinct rooms, default `256`, CLI `--max-rooms`.
 - `handshakeTimeout` - maximum time to complete username registration, default `10s`.
 - `readTimeout` - idle socket read timeout after handshake, default `5m`.
 - `historyFile` / `historyLimit` / `historyReplayLimit` - optional replayable JSONL history.
 - `accountFile` - optional account registry.
 - `tls` - optional JSSE TLS server socket configuration.
+- `rateLimit` - per-connection token buckets for inbound frames (default burst `60`, `20/s`) and for
+  room creation (default burst `10`, `0.5/s`); exhausted buckets answer `ERROR` instead of closing
+  the connection.
 
 The legacy `new ChatServer(int port)` constructor delegates to `ChatServerConfig.ofPort(port)`.
 
@@ -97,9 +103,13 @@ The Swing model stores a bounded local timeline for the current app session. Tex
 deduplicated by `messageId`, own messages are rendered as `Вы`, and user add/remove protocol events
 are appended as service events instead of ordinary chat text.
 
-Room membership lives on the server. `general` always exists, room creation is idempotent through
-`ROOM_JOIN`, distinct rooms are capped at 1,000, and clients that try to send to a room before
-joining receive an explicit `ERROR`.
+Room membership lives on the server. `general` always exists and is never reclaimed, room creation is
+idempotent through `ROOM_JOIN`, distinct rooms are capped by `maxRooms`, and clients that try to send
+to a room before joining receive an explicit `ERROR`. Every other room is reclaimed and announced
+with `ROOM_REMOVED` once its last member leaves or disconnects, so room names cannot accumulate for
+the lifetime of the process. Membership and reclamation run under a dedicated rooms monitor that
+holds no I/O and is never nested inside the sessions monitor, so the cap stays exact and a room
+cannot disappear between a joiner observing it and joining it.
 
 ## History Store
 

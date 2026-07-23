@@ -267,6 +267,19 @@ public final class ClientGuiController extends ChatClient {
     }
 
     @Override
+    protected void informAboutRoomRemoved(String roomName) {
+      if (!model.removeRoom(roomName)) {
+        return;
+      }
+      if (roomName.equals(currentRoom)) {
+        currentRoom = ChatMessage.GENERAL_ROOM;
+      }
+      model.addServiceMessage("Комната " + roomName + " закрыта");
+      view.refreshRooms(currentRoom);
+      view.refreshMessages();
+    }
+
+    @Override
     protected void informAboutRoomJoined(String roomName) {
       model.joinRoom(roomName);
       currentRoom = roomName;

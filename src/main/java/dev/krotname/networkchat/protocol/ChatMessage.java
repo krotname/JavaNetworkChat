@@ -108,6 +108,10 @@ public record ChatMessage(
     return withRoom(MessageType.ROOM_ADDED, room);
   }
 
+  public static ChatMessage roomRemoved(String room) {
+    return withRoom(MessageType.ROOM_REMOVED, room);
+  }
+
   public static ChatMessage roomJoined(String room) {
     return withRoom(MessageType.ROOM_JOINED, room);
   }

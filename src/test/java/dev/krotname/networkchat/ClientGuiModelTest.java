@@ -54,6 +54,20 @@ class ClientGuiModelTest {
   }
 
   @Test
+  void dropsRoomsReclaimedByTheServer() {
+    ClientGuiModel model = new ClientGuiModel();
+    model.joinRoom("dev");
+    model.addRoom("ops");
+
+    assertTrue(model.removeRoom("dev"));
+    assertFalse(model.removeRoom("dev"));
+
+    assertFalse(model.getAllRoomNames().contains("dev"));
+    assertFalse(model.getJoinedRoomNames().contains("dev"));
+    assertTrue(model.getAllRoomNames().contains("ops"));
+  }
+
+  @Test
   void deduplicatesTimelineByMessageId() {
     ClientGuiModel model = new ClientGuiModel();
     ChatMessage message = new ChatMessage(MessageType.TEXT, "hello", "alice", 1L, "same-id");

@@ -374,6 +374,7 @@ public abstract class ChatClient {
           case USER_ADDED -> informAboutAddingNewUser(message.data());
           case USER_REMOVED -> informAboutDeletingNewUser(message.data());
           case ROOM_ADDED -> informAboutRoomAdded(message.room());
+          case ROOM_REMOVED -> informAboutRoomRemoved(message.room());
           case ROOM_JOINED -> informAboutRoomJoined(message.room());
           case ROOM_LEFT -> informAboutRoomLeft(message.room());
           case TEXT, ROOM_TEXT, PRIVATE_TEXT -> processIncomingMessage(message);
@@ -397,6 +398,10 @@ public abstract class ChatClient {
 
     protected void informAboutRoomAdded(String roomName) {
       System.out.printf("Комната доступна: %s%n", roomName);
+    }
+
+    protected void informAboutRoomRemoved(String roomName) {
+      System.out.printf("Комната закрыта: %s%n", roomName);
     }
 
     protected void informAboutRoomJoined(String roomName) {
@@ -457,7 +462,7 @@ public abstract class ChatClient {
             throw new IOException("Server sent an invalid user event");
           }
         }
-        case ROOM_ADDED, ROOM_JOINED, ROOM_LEFT -> {
+        case ROOM_ADDED, ROOM_REMOVED, ROOM_JOINED, ROOM_LEFT -> {
           if (!isValidRoomName(message.room())) {
             throw new IOException("Server sent an invalid room event");
           }
