@@ -357,7 +357,9 @@ public final class ChatServer implements AutoCloseable {
         case PRIVATE_TEXT -> handlePrivateText(message, userName, connection);
         case ROOM_JOIN -> handleRoomJoin(message, userName, connection, limits);
         case ROOM_LEAVE -> handleRoomLeave(message, userName, connection);
-        case NAME_ACCEPTED,
+        case NAME_REQUEST,
+            USER_NAME,
+            NAME_ACCEPTED,
             USER_ADDED,
             USER_REMOVED,
             ROOM_ADDED,
@@ -367,7 +369,6 @@ public final class ChatServer implements AutoCloseable {
             ERROR ->
             connection.send(
                 ChatMessage.withData(MessageType.ERROR, "Unsupported client frame", null));
-        default -> throw new IOException("Unsupported message type: " + message.type());
       }
     }
   }

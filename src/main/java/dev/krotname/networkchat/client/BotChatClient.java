@@ -1,6 +1,7 @@
 package dev.krotname.networkchat.client;
 
 import dev.krotname.networkchat.protocol.ChatMessage;
+import dev.krotname.networkchat.protocol.MessageType;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.LocalDateTime;
@@ -85,6 +86,23 @@ public final class BotChatClient extends ChatClient {
     return String.format("Информация для %s: %s", message.sender(), answer);
   }
 
+  /**
+   * Answers where the command was asked: privately to the sender of a private command, otherwise in
+   * the room the command came from. Replying with a plain text message would publish the answer to
+   * a private question in the general room.
+   */
+  ChatMessage replyTo(ChatMessage message, String answer) {
+    String sender = getResolvedUserName() == null ? botUserName : getResolvedUserName();
+    if (message.type() == MessageType.PRIVATE_TEXT) {
+      return ChatMessage.privateText(answer, sender, message.sender());
+    }
+    String room = message.room();
+    if (room == null || room.isBlank()) {
+      return ChatMessage.text(answer, sender);
+    }
+    return ChatMessage.roomText(answer, sender, room);
+  }
+
   private final class BotSocketThread extends SocketThread {
     private static final String GREETING =
         "Привет чатику. Я бот. Понимаю команды: дата, день, месяц, год, время, час, минуты, секунды.";
@@ -98,9 +116,10 @@ public final class BotChatClient extends ChatClient {
     @Override
     protected void processIncomingMessage(ChatMessage message) {
       String answer = answerForCommand(message);
-      if (answer != null) {
-        sendTextMessage(answer);
+      if (answer == null) {
+        return;
       }
+      sendMessage(replyTo(message, answer));
     }
 
     @Override
