@@ -152,6 +152,8 @@ public final class ChatWindow {
         new WindowAdapter() {
           @Override
           public void windowClosing(WindowEvent event) {
+            // Otherwise a thread waiting in requestConnectionSettings never wakes up.
+            cancelConnectionSettings();
             controller.disconnect();
           }
         });
