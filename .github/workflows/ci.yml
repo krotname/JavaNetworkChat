@@ -61,6 +61,7 @@ jobs:
         with:
           name: jacoco-report-${{ github.run_id }}
           path: build/reports/jacoco/jacocoAllReport/html
+          retention-days: 7
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
