@@ -1,5 +1,8 @@
 # Network Chat
 
+> [!IMPORTANT]
+> Проект завершён и архивирован. Репозиторий сохранён в режиме только для чтения.
+
 [![CI](https://github.com/krotname/JavaNetworkChat/actions/workflows/ci.yml/badge.svg)](https://github.com/krotname/JavaNetworkChat/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/krotname/JavaNetworkChat/actions/workflows/codeql.yml/badge.svg)](https://github.com/krotname/JavaNetworkChat/actions/workflows/codeql.yml)
 [![Coverage](https://codecov.io/gh/krotname/JavaNetworkChat/branch/main/graph/badge.svg)](https://app.codecov.io/gh/krotname/JavaNetworkChat)
